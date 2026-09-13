@@ -1,0 +1,1558 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lvats · Local Video/Audio Transform Service</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #121722; --panel-2: #171e2c;
+    --line: rgba(255,255,255,.08); --text: #e8ecf4; --muted: #8b94a7;
+    --accent: #ffa03c; --accent-hot: #ff6b35; --ok: #5ad6a2; --err: #ff6b7a;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+    --display: "Bricolage Grotesque", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--display); }
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -2;
+    background:
+      radial-gradient(600px 420px at 82% -8%, rgba(255,107,53,.16), transparent 60%),
+      radial-gradient(520px 380px at -6% 108%, rgba(255,160,60,.10), transparent 60%),
+      radial-gradient(900px 700px at 50% 120%, rgba(30,42,70,.55), transparent 70%);
+  }
+  .wrap { width: min(1320px, calc(100vw - 40px)); margin: 0 auto; padding: 28px 0 60px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: baseline; gap: 14px; }
+  .brand .flame { width: 12px; height: 12px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffd9a0, var(--accent-hot)); box-shadow: 0 0 18px rgba(255,107,53,.8); align-self: center; animation: breathe 2.6s ease-in-out infinite; }
+  h1 { margin: 0; font-size: 26px; font-weight: 800; }
+  h1 .thin { font-weight: 300; color: var(--muted); font-size: 15px; margin-left: 10px; letter-spacing: 2px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { font-family: var(--mono); font-size: 12px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: rgba(255,255,255,.02); display: inline-flex; align-items: center; gap: 7px; }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .chip.on { color: var(--ok); border-color: rgba(90,214,162,.35); }
+  .chip.on .dot { background: var(--ok); box-shadow: 0 0 8px rgba(90,214,162,.8); }
+  .chip.busy { color: var(--accent); border-color: rgba(255,160,60,.4); }
+  .chip.busy .dot { background: var(--accent); box-shadow: 0 0 8px rgba(255,160,60,.8); animation: breathe 1.1s infinite; }
+
+  .card { background: linear-gradient(180deg, var(--panel), rgba(18,23,34,.7)); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; margin-top: 16px; }
+  .card-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .card-head:has(+ [hidden]) { margin-bottom: 0; }
+  .label { font-size: 12px; letter-spacing: 2px; color: var(--muted); font-family: var(--mono); }
+  .empty { color: #566179; font-family: var(--mono); font-size: 12.5px; padding: 4px 2px; }
+
+  .btn { border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 12.5px; padding: 8px 14px; cursor: pointer; transition: .15s; }
+  .btn:hover { color: var(--accent); border-color: rgba(255,160,60,.45); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .collapse-toggle { margin-left: auto; padding: 5px 10px; }
+  .btn-main { border: 0; border-radius: 10px; padding: 9px 16px; font-weight: 700; color: #221204; background: linear-gradient(135deg, #ffc46b, var(--accent) 45%, var(--accent-hot)); cursor: pointer; font-size: 13.5px; }
+  .btn-main:disabled { filter: grayscale(.7) brightness(.6); cursor: not-allowed; }
+
+  /* 快捷提示词 */
+  .quick-prompts-wrap { margin-top: 16px; position: relative; z-index: 5; }
+  .quick-prompts-guide { color: #566179; font-family: var(--mono); font-size: 12.5px; padding: 6px 2px; }
+  .quick-prompts-list { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: relative; z-index: 5; }
+  .qp-item { display: inline-flex; align-items: center; gap: 8px; position: relative; user-select: none; z-index: 5; }
+  .qp-dot { width: 14px; height: 14px; border-radius: 50%; flex: 0 0 14px; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); transition: transform .12s; }
+  .qp-dot.editing { transform: scale(1.4); }
+  .qp-dot.preview { box-shadow: inset 0 0 0 1px rgba(255,255,255,.35), inset 0 0 0 3px rgba(11,14,20,.6); outline: 1px dashed rgba(255,255,255,.55); outline-offset: 2px; opacity: .85; }
+  .qp-box { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-weight: 700; font-size: 13.5px; cursor: pointer; transition: .15s; }
+  .qp-box:hover { border-color: rgba(255,160,60,.45); background: #1c2434; }
+  .qp-name { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qp-edit, .qp-delete { background: transparent; border: 0; padding: 2px; margin: 0; color: var(--muted); font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; }
+  .qp-edit:hover, .qp-delete:hover { color: var(--text); background: rgba(255,255,255,.08); }
+  .qp-delete { display: none; }
+  .qp-item:hover .qp-delete { display: inline-flex; }
+  .qp-actions { display: inline-flex; align-items: center; gap: 2px; margin-left: 2px; }
+  .qp-item.editing .qp-box { background: #0a0d13; border-color: rgba(255,160,60,.6); padding: 4px 8px; }
+  .qp-item.editing .qp-name-input { background: transparent; border: 0; outline: none; color: var(--text); font-family: var(--display); font-weight: 700; font-size: 13.5px; width: 110px; padding: 2px 4px; }
+  .qp-confirm { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; background: rgba(90,214,162,.15); color: var(--ok); border: 1px solid rgba(90,214,162,.35); cursor: pointer; font-size: 14px; margin-left: 2px; padding: 0; line-height: 1; }
+  .qp-confirm:hover { background: rgba(90,214,162,.25); }
+  .qp-error { color: var(--err); font-size: 11.5px; font-family: var(--mono); margin-left: 6px; white-space: nowrap; }
+  .qp-color-panel { position: fixed; z-index: 9999; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 8px; min-width: 200px; }
+  .qp-color-row { display: flex; align-items: center; gap: 8px; }
+  .qp-color-row label { font-family: var(--mono); font-size: 11px; color: var(--muted); width: 14px; text-align: center; }
+  .qp-color-row input[type="number"] { flex: 1; background: #0a0d13; border: 1px solid var(--line); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 5px 6px; outline: none; }
+  .qp-color-row input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .qp-toast { position: fixed; bottom: 24px; right: 24px; z-index: 50; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; box-shadow: 0 12px 40px rgba(0,0,0,.45); display: flex; align-items: center; gap: 12px; font-size: 13.5px; }
+  .qp-toast button { background: transparent; border: 0; color: var(--accent); cursor: pointer; font-family: var(--mono); font-size: 12px; text-decoration: underline; }
+
+  .promptbar { margin-top: 12px; display: flex; align-items: center; gap: 12px; background: linear-gradient(180deg, var(--panel), rgba(18,23,34,.7)); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+  .promptbar .tag { font-family: var(--mono); font-size: 12px; letter-spacing: 2px; color: var(--accent); white-space: nowrap; }
+  .promptbar input { flex: 1; height: 76px; box-sizing: border-box; background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; color: var(--text); font-family: var(--mono); font-size: 13.5px; padding: 10px 14px; outline: none; transition: .15s; }
+  .promptbar input:focus { border-color: rgba(255,160,60,.55); box-shadow: 0 0 0 3px rgba(255,160,60,.14); }
+  .promptbar input.flash { background: rgba(255,160,60,.12); }
+  .btn-save-prompt { border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 12px; padding: 9px 13px; white-space: nowrap; cursor: pointer; }
+  .btn-save-prompt:hover:not(:disabled) { color: var(--accent); border-color: rgba(255,160,60,.45); }
+  .btn-save-prompt:disabled { color: #3d4556; cursor: not-allowed; }
+
+  /* 文件队列 */
+  .file-drop-zone { position: relative; transition: border-color .15s, box-shadow .15s, background .15s; }
+  .file-drop-zone.drag-active { border-color: rgba(90,214,162,.85); box-shadow: 0 0 0 3px rgba(90,214,162,.16); background: linear-gradient(180deg, rgba(90,214,162,.08), var(--panel)); }
+  .file-drop-zone.uploading { border-color: rgba(255,160,60,.6); }
+  .drop-hint { margin: 2px 0 10px; padding: 10px 12px; border: 1px dashed rgba(154,208,255,.35); border-radius: 10px; color: #9ad0ff; background: rgba(90,168,232,.055); font-family: var(--mono); font-size: 12px; text-align: center; pointer-events: none; }
+  .file-drop-zone.drag-active .drop-hint { border-color: var(--ok); color: var(--ok); background: rgba(90,214,162,.09); }
+  .drop-progress { color: var(--accent); margin-left: 8px; }
+  .file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .file-list li { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 10px; background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-family: var(--mono); font-size: 12.8px; }
+  .file-list li.bad { border-color: rgba(255,107,122,.5); }
+  .file-list li.bad .fname { color: var(--err); }
+  .file-list .fname { color: #cdd6e6; overflow-wrap: anywhere; }
+  .file-list .fpath { color: #566179; font-size: 11px; overflow-wrap: anywhere; }
+  .upload-mark { color: #9ad0ff; font-size: 10.5px; }
+  .file-list .warn { color: var(--err); font-size: 11px; }
+  .file-list .right { display: flex; align-items: center; gap: 6px; }
+  .file-pager { margin-top: 9px; display: flex; align-items: center; justify-content: center; gap: 9px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .file-pager button { min-width: 32px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); cursor: pointer; }
+  .file-pager button:disabled { opacity: .35; cursor: not-allowed; }
+  .fmt-done { border: 1px solid rgba(90,214,162,.4); color: var(--ok); background: rgba(90,214,162,.08); border-radius: 7px; font-family: var(--mono); font-size: 11px; padding: 3px 8px; cursor: pointer; }
+  .fmt-done:hover { background: rgba(90,214,162,.18); }
+  .rm { border: 0; background: transparent; color: var(--muted); font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+  .rm:hover { color: var(--err); background: rgba(255,107,122,.12); }
+  input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .4; }
+  .pastebox { margin-top: 12px; display: flex; gap: 8px; align-items: stretch; }
+  .pastebox textarea { flex: 1; background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 8px 10px; resize: vertical; min-height: 44px; outline: none; }
+  .pastebox textarea:focus { border-color: rgba(255,160,60,.5); }
+  .workspace-grid { display: grid; grid-template-columns: minmax(320px, 1.05fr) minmax(300px, .9fr) minmax(350px, 1fr); grid-template-areas: "queue models load" "queue models output"; gap: 16px; margin-top: 16px; align-items: stretch; }
+    .workspace-grid > .card { margin-top: 0; min-width: 0; padding: 14px 16px; }
+    .workspace-grid .card-head { margin-bottom: 8px; }
+  .file-queue-card { grid-area: queue; }
+  .file-queue-card.collapsed { align-self: start; }
+  .model-card { grid-area: models; }
+  .file-load-card { grid-area: load; }
+  .output-card { grid-area: output; }
+  .file-load-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .file-load-card .pastebox { flex-direction: column; }
+    .file-load-card .pastebox { margin-top: 8px; gap: 6px; }
+    .file-load-card .pastebox textarea { min-height: 48px; }
+    .file-load-card .pastebox .btn { align-self: flex-end; }
+    .file-load-card .drop-hint { margin: 8px 0; padding: 8px 10px; }
+    .output-card .fmt-btn { flex: 1 1 70px; padding: 9px 0; }
+    .output-card .dl-row { margin-top: 10px; }
+  .file-load-card .pastebox .btn { align-self: flex-end; }
+  .file-queue-card .file-list { max-height: 430px; overflow: auto; padding-right: 3px; }
+  .model-card .card-head { align-items: flex-start; }
+  .model-card .fam-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .model-card .fam-name { display: block; flex: 0 0 100%; min-width: 0; margin: 0; }
+  .model-card .ready-chip { margin: 0; }
+  .model-card .dl-row { flex-wrap: wrap; }
+  .model-card .model-select { flex: 1 1 190px; max-width: 100%; min-width: 0; }
+  .model-card .dl-input { flex-basis: 100%; min-width: 0; }
+
+  /* 格式按钮 */
+  .fmt-row { display: flex; gap: 10px; }
+  .fmt-btn { flex: 0 0 90px; padding: 12px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); color: var(--muted); font-family: var(--mono); font-size: 15px; cursor: pointer; transition: .15s; }
+  .fmt-btn:hover { color: var(--accent); border-color: rgba(255,160,60,.5); background: #1c2434; }
+  .model-select { background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; color: var(--text); font-family: var(--mono); font-size: 12.5px; padding: 9px 10px; outline: none; max-width: 260px; }
+  .model-select:focus { border-color: rgba(255,160,60,.55); }
+  .mtag { color: #9ad0ff; border: 1px solid rgba(154,208,255,.35); border-radius: 6px; padding: 1px 7px; font-size: 11px; margin-left: 4px; }
+  .dl-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .dl-input { flex: 1; background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 9px 10px; outline: none; }
+  .ready-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: rgba(255,255,255,.02); border-radius: 999px; padding: 4px 12px; font-family: var(--mono); font-size: 12px; color: #cdd6e6; margin: 0 6px 6px 0; }
+  .ready-chip .eng { color: var(--muted); font-size: 10.5px; }
+  .fam-row { margin-bottom: 6px; }
+  .fam-name { display: inline-block; font-family: var(--mono); font-size: 11px; letter-spacing: 1.5px; color: var(--accent); margin-right: 10px; min-width: 110px; }
+
+  /* 任务队列 */
+  .ascii-progress { font-family: var(--mono); font-size: 13.5px; line-height: 1.6; color: var(--muted); white-space: pre; overflow-x: auto; padding: 2px 0; margin-bottom: 10px; }
+  .ascii-progress .fill { color: var(--accent); }
+  .ascii-progress .head { color: var(--accent-hot); }
+  .ascii-progress .pct { color: var(--accent); }
+  .ascii-progress .time { color: #566179; }
+  .ascii-progress.done .fill, .ascii-progress.done .pct, .ascii-progress.done .head { color: var(--ok); }
+  .ascii-progress.fail .fill, .ascii-progress.fail .pct, .ascii-progress.fail .head { color: var(--err); }
+  .task-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .task-list li { display: grid; grid-template-columns: 26px minmax(0,1fr) auto auto minmax(130px,auto) auto; align-items: center; gap: 10px; background: #0a0d13; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-family: var(--mono); font-size: 12.5px; }
+  .task-list .idx { color: #566179; }
+  .task-list .name { color: #cdd6e6; overflow-wrap: anywhere; }
+  .task-list .fmt { color: var(--accent); border: 1px solid rgba(255,160,60,.35); border-radius: 6px; padding: 1px 7px; font-size: 11px; }
+  .tstate { min-width: 130px; text-align: right; }
+  .tstate.queued { color: var(--muted); }
+  .tstate.running { color: var(--accent); }
+  .tstate.done { color: var(--ok); }
+  .tstate.failed { color: var(--err); }
+  .tstate.cancelled { color: var(--accent); }
+  .task-list a { color: var(--ok); text-decoration: none; margin-left: 8px; }
+  .terr { grid-column: 2 / -1; color: var(--err); font-size: 11px; }
+  .task-actions { display: flex; align-items: center; gap: 2px; }
+  .tbtn { border: 0; background: transparent; color: var(--muted); font-family: var(--mono); font-size: 12px; cursor: pointer; padding: 3px 6px; border-radius: 6px; line-height: 1; }
+  .tbtn:hover { color: var(--accent); background: rgba(255,160,60,.12); }
+  .tbtn.danger:hover { color: var(--err); background: rgba(255,107,122,.12); }
+  .tbtn:disabled { opacity: .28; cursor: not-allowed; }
+  .tbtn:disabled:hover { color: var(--muted); background: transparent; }
+  .tbtn.cancelling { color: var(--accent); opacity: .8; }
+  .tbtn.restore:hover { color: var(--ok); background: rgba(90,214,162,.12); }
+  .archive-card .task-list li { opacity: .86; }
+
+  /* 实时区 / 控制台 */
+  .live-body { min-height: 80px; max-height: 220px; overflow: auto; background: #0a0d13; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: 14.5px; line-height: 1.9; color: #cdd6e6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .live-body .placeholder { color: #566179; font-family: var(--mono); font-size: 12.5px; }
+  .live-body .caret { display: inline-block; width: 9px; height: 16px; margin-left: 2px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  .console pre { margin: 0; min-height: 80px; max-height: 200px; overflow: auto; background: #0a0d13; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-family: var(--mono); font-size: 12.8px; line-height: 1.75; color: #b8c4da; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .console pre .t { color: #566179; }
+  .console pre .ok { color: var(--ok); }
+  .console pre .err { color: var(--err); }
+  .console pre .warn { color: var(--accent); }
+  .monitor-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 16px; margin-top: 16px; align-items: stretch; }
+    .monitor-grid > .card { margin-top: 0; min-width: 0; padding: 14px 16px; }
+  .current-task-card, .console { display: flex; flex-direction: column; }
+  .current-task-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 9px; font-family: var(--mono); }
+  .current-task-name { color: #cdd6e6; font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+  .current-task-detail { color: #566179; font-size: 11.5px; text-align: right; }
+    .current-task-card .live-body, .console pre { flex: 1; min-height: 145px; max-height: 220px; }
+
+  #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 60; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 18px; font-size: 13px; box-shadow: 0 12px 40px rgba(0,0,0,.5); display: none; }
+  #downBanner { margin-top: 16px; border: 1px solid rgba(255,107,122,.55); background: rgba(255,107,122,.10); color: var(--err); border-radius: 12px; padding: 14px 18px; font-size: 14px; font-weight: 700; }
+  footer { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--line); color: #566179; font-family: var(--mono); font-size: 11.5px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .rowbar { display: block; height: 4px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 5px; overflow: hidden; }
+  .rowbar-fill { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent), var(--accent-hot)); transition: width .4s; }
+  #shutdownBtn { color: var(--err); border-color: rgba(255,107,122,.35); }
+  #shutdownBtn:hover { color: var(--err); border-color: rgba(255,107,122,.7); background: rgba(255,107,122,.08); }
+  #restartBtn { color: var(--accent); border-color: rgba(255,160,60,.4); }
+  #restartBtn:hover { color: var(--accent-hot); border-color: rgba(255,160,60,.75); background: rgba(255,160,60,.08); }
+  #downBanner.restarting { border-color: rgba(255,160,60,.55); background: rgba(255,160,60,.10); color: var(--accent); }
+  #toast.warn { border-color: rgba(255,160,60,.5); color: var(--accent); }
+  #toast.err { border-color: rgba(255,107,122,.5); color: var(--err); }
+  #toast.ok { border-color: rgba(90,214,162,.5); color: var(--ok); }
+  [hidden] { display: none !important; }
+  @keyframes breathe { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.8); opacity: .7; } }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (max-width: 1180px) {
+    .workspace-grid { grid-template-columns: 1fr; grid-template-areas: "load" "queue" "output" "models"; }
+    .monitor-grid { grid-template-columns: 1fr; }
+    .file-queue-card .file-list { max-height: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="flame" aria-hidden="true"></span>
+      <h1>Lvats<span class="thin">Local Video/Audio Transform Service</span></h1>
+    </div>
+    <div class="chips">
+      <span class="chip" id="verChip"><span class="dot"></span>v1.0.0</span>
+      <span class="chip" id="gpuChip"><span class="dot"></span>GPU</span>
+      <span class="chip" id="modelChip"><span class="dot"></span>模型未加载</span>
+      <button class="btn" id="unload" hidden>⏏ 卸载模型</button>
+      <button class="btn" id="restartBtn" title="安全保存队列并重启 Lvats 本机服务">↻ 重启服务</button>
+      <button class="btn" id="shutdownBtn" title="停止 Lvats 服务（将中断运行中的任务）">⏻ 停止服务</button>
+    </div>
+  </header>
+
+  <div id="downBanner" hidden>⛔ 服务已停止，如需重启请双击 启动Lvats.bat</div>
+
+  <!-- 快捷提示词 -->
+  <div class="quick-prompts-wrap">
+    <div class="quick-prompts-guide" id="quickPromptsGuide">// 保存常用提示词后，这里会出现快捷按钮</div>
+    <div class="quick-prompts-list" id="quickPromptsList"></div>
+  </div>
+
+  <div class="promptbar">
+    <span class="tag">✦ 提示词</span>
+    <input id="promptInput" type="text" maxlength="500"
+           placeholder="热词 / 领域词汇 / 背景说明（可选），创建任务时随任务保存。例：词汇：马原、毛中特、剩余价值……" />
+    <button class="btn-save-prompt" id="savePromptBtn" disabled>保存为快捷提示</button>
+  </div>
+
+  <div class="workspace-grid">
+    <!-- 文件队列：左侧跨两行 -->
+    <div class="card file-queue-card">
+      <div class="card-head">
+        <input type="checkbox" id="checkAll" title="全选 / 取消全选" />
+        <span class="label">文件队列</span>
+        <span class="empty" id="fileCount"></span>
+        <button class="btn collapse-toggle" id="fileCollapseBtn" type="button" aria-expanded="true">折叠</button>
+      </div>
+      <div id="fileQueueBody">
+        <ul class="file-list" id="fileList"></ul>
+        <div class="empty" id="fileEmpty">// 尚未加载文件；可在右侧选择、拖放或粘贴路径。</div>
+        <div class="file-pager" id="filePager" hidden>
+          <button id="filePrev" type="button" title="上一页">‹</button>
+          <span id="filePageInfo"></span>
+          <button id="fileNext" type="button" title="下一页">›</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 文件加载：右上 -->
+    <div class="card file-drop-zone file-load-card" id="fileDropZone">
+      <div class="card-head"><span class="label">文件加载</span></div>
+      <div class="file-load-actions">
+        <button class="btn-main" id="pickBtn">选择文件</button>
+        <button class="btn-main" id="pickFolderBtn" style="background:linear-gradient(135deg,#9ad0ff,#5aa8e8 45%,#3c7bd0)">选择文件夹</button>
+      </div>
+      <div class="drop-hint" id="dropHint">⇩ 把音频或视频文件拖到这里<span class="drop-progress" id="dropProgress"></span></div>
+      <div class="pastebox">
+        <textarea id="pasteBox" rows="2" placeholder="备用：粘贴本机完整路径，每行一条，如 D:\music\a.mp3"></textarea>
+        <button class="btn" id="pasteAdd">添加粘贴路径</button>
+      </div>
+    </div>
+
+    <!-- 输出格式：右下 -->
+    <div class="card output-card">
+      <div class="card-head">
+        <span class="label">文件输出选项</span>
+        <span class="empty">先勾选左侧文件，再选择格式</span>
+      </div>
+      <div class="fmt-row" style="align-items:center; flex-wrap:wrap">
+        <button class="fmt-btn" data-fmt="txt">txt</button>
+        <button class="fmt-btn" data-fmt="srt">srt</button>
+        <button class="fmt-btn" data-fmt="vtt">vtt</button>
+      </div>
+      <div class="dl-row">
+        <span class="label">模型</span>
+        <select id="modelSelect" class="model-select" title="本次任务使用的 ASR 模型"></select>
+      </div>
+    </div>
+
+  <!-- 模型管理：中间跨两行 -->
+  <div class="card model-card">
+    <div class="card-head">
+      <span class="label">模型管理</span>
+      <button class="btn" id="rescanBtn">⟳ 重新扫描本地模型</button>
+      <span class="empty" id="modelMgmtInfo"></span>
+    </div>
+    <div class="empty" id="readyModels">// 已就绪模型加载中…</div>
+    <div class="dl-row">
+      <select id="dlPreset" class="model-select">
+        <option value="">— 选择内置 Qwen3-ASR 模型 —</option>
+      </select>
+      <button class="btn" id="dlPresetBtn">⬇ 下载所选</button>
+    </div>
+    <div class="dl-row">
+      <input id="dlCustomRepo" class="dl-input" type="text" placeholder="自定义 HF repo id，如 Systran/faster-whisper-tiny-en（可用 HF_ENDPOINT 切镜像）" />
+      <button class="btn" id="dlCustomBtn">⬇ 下载</button>
+    </div>
+    <div class="empty" id="dlStatus"></div>
+  </div>
+  </div>
+
+  <div class="monitor-grid">
+    <!-- 当前任务：独立视图，不改变实际任务队列 -->
+    <div class="card current-task-card">
+      <div class="card-head">
+        <span class="label">当前任务</span>
+        <span class="chip" id="stateChip"><span class="dot"></span><span id="stateText">等待文件</span></span>
+        <span class="chip" id="liveChip" hidden><span class="dot"></span>正在识别</span>
+      </div>
+      <div class="current-task-meta">
+        <span class="current-task-name" id="currentTaskName">尚无任务</span>
+        <span class="current-task-detail" id="currentTaskDetail">等待文件加入队列</span>
+      </div>
+      <div class="ascii-progress" id="asciiProgress" hidden></div>
+      <div class="live-body" id="liveBody" aria-live="polite">
+        <span class="placeholder">// 识别到的内容会实时显示在这里</span>
+      </div>
+    </div>
+
+    <!-- 控制台 -->
+    <div class="card console">
+      <div class="card-head"><span class="label">状态控制台</span></div>
+      <pre id="log" aria-live="polite"></pre>
+    </div>
+  </div>
+
+  <!-- 任务队列：当前任务与状态控制台下方 -->
+  <div class="card task-queue-card">
+    <div class="card-head">
+      <span class="label">任务队列</span>
+      <span class="empty" id="taskCount"></span>
+      <button class="btn" id="archiveCompletedBtn" type="button">归档已完成</button>
+      <button class="btn collapse-toggle" id="taskCollapseBtn" type="button" aria-expanded="true">折叠</button>
+    </div>
+    <div id="taskQueueBody">
+      <ul class="task-list" id="taskList"></ul>
+      <div class="empty" id="taskEmpty">// 任务 = 文件路径 + 输出格式；单 worker 顺序执行，运行中可随时添加</div>
+    </div>
+  </div>
+
+  <!-- 已归档任务：独立模块，不删除任务记录或输出文件 -->
+  <div class="card archive-card">
+    <div class="card-head">
+      <span class="label">已归档任务</span>
+      <span class="empty" id="archiveCount"></span>
+      <button class="btn collapse-toggle" id="archiveCollapseBtn" type="button" aria-expanded="true">折叠</button>
+    </div>
+    <div id="archiveBody">
+      <ul class="task-list" id="archiveList"></ul>
+      <div class="empty" id="archiveEmpty">// 暂无归档；已完成任务可从上方任务队列归档到这里</div>
+    </div>
+  </div>
+</div>
+<footer><span id="footVer">Lvats v—</span><span>Local Video/Audio Transform Service</span></footer>
+<div id="toast"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const fileList = $('fileList'), fileEmpty = $('fileEmpty'), fileCount = $('fileCount'),
+        filePager = $('filePager'), filePrev = $('filePrev'), fileNext = $('fileNext'), filePageInfo = $('filePageInfo'),
+        fileQueueBody = $('fileQueueBody'), fileCollapseBtn = $('fileCollapseBtn'),
+        checkAll = $('checkAll'), pickBtn = $('pickBtn'), pickFolderBtn = $('pickFolderBtn'),
+        fileDropZone = $('fileDropZone'), dropProgress = $('dropProgress'),
+        pasteBox = $('pasteBox'), pasteAdd = $('pasteAdd'),
+        taskList = $('taskList'), taskEmpty = $('taskEmpty'), taskCount = $('taskCount'),
+        taskQueueBody = $('taskQueueBody'), taskCollapseBtn = $('taskCollapseBtn'),
+        archiveCompletedBtn = $('archiveCompletedBtn'), archiveList = $('archiveList'),
+        archiveEmpty = $('archiveEmpty'), archiveCount = $('archiveCount'),
+        archiveBody = $('archiveBody'), archiveCollapseBtn = $('archiveCollapseBtn'),
+        asciiProgress = $('asciiProgress'), liveBody = $('liveBody'), liveChip = $('liveChip'),
+        currentTaskName = $('currentTaskName'), currentTaskDetail = $('currentTaskDetail'),
+        logBox = $('log'), stateText = $('stateText'), stateChip = $('stateChip'),
+        modelChip = $('modelChip'), gpuChip = $('gpuChip'), verChip = $('verChip'),
+        unloadBtn = $('unload'), restartBtn = $('restartBtn'), shutdownBtn = $('shutdownBtn'), downBanner = $('downBanner'),
+        footVer = $('footVer'), toastEl = $('toast'),
+        promptInput = $('promptInput'), savePromptBtn = $('savePromptBtn'),
+        quickPromptsList = $('quickPromptsList'), quickPromptsGuide = $('quickPromptsGuide');
+
+  let state = { files: [], tasks: [] };
+  const checked = new Set();
+  const FILE_PAGE_SIZE = 10, MAX_FILE_QUEUE = 50;
+  let filePage = 1;
+  let quickPrompts = [], editingPromptId = null, creatingPrompt = false;
+  let toastTimer = null, qpToastTimer = null;
+
+  const PRESET_COLORS = [
+    {r:255,g:160,b:60}, {r:255,g:107,b:53}, {r:90,g:214,b:162},
+    {r:82,g:172,b:255}, {r:218,g:112,b:214}, {r:255,g:206,b:84},
+    {r:255,g:99,b:132}, {r:138,g:180,b:248}, {r:168,g:237,b:181},
+    {r:255,g:159,b:124}, {r:196,g:181,b:255}, {r:133,g:226,b:215},
+  ];
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const rgbStyle = (c) => `rgb(${c.r},${c.g},${c.b})`;
+  const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+
+  async function postJSON(url, body) {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                 body: JSON.stringify(body || {}) });
+    return await r.json().catch(() => ({}));
+  }
+
+  function log(msg, cls) {
+    const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    const line = document.createElement('span');
+    line.innerHTML = `<span class="t">[${time}]</span> <span class="${cls || ''}">${esc(msg)}</span>\n`;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  function toast(msg, mode) {
+    toastEl.textContent = msg;
+    toastEl.className = mode || '';
+    toastEl.style.display = 'block';
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 4000);
+  }
+  function setState(text, mode) {
+    stateText.textContent = text;
+    stateChip.className = 'chip' + (mode ? ' ' + mode : '');
+  }
+
+  function setupCollapse(button, body, storageKey) {
+    const card = button.closest('.card');
+    const apply = (collapsed) => {
+      body.hidden = collapsed;
+      card.classList.toggle('collapsed', collapsed);
+      button.textContent = collapsed ? '展开' : '折叠';
+      button.setAttribute('aria-expanded', String(!collapsed));
+    };
+    apply(localStorage.getItem(storageKey) === '1');
+    button.addEventListener('click', () => {
+      const collapsed = !body.hidden;
+      apply(collapsed);
+      localStorage.setItem(storageKey, collapsed ? '1' : '0');
+    });
+  }
+  setupCollapse(fileCollapseBtn, fileQueueBody, 'lvats.fileQueueCollapsed');
+  setupCollapse(taskCollapseBtn, taskQueueBody, 'lvats.taskQueueCollapsed');
+  setupCollapse(archiveCollapseBtn, archiveBody, 'lvats.archiveCollapsed');
+
+  /* ── ASCII 长条进度 ── */
+  function renderAsciiBar(pct, elapsed, mode) {
+    const width = 40;
+    const pos = clamp(Math.round(pct / 100 * width), 0, width);
+    const filled = '━'.repeat(Math.max(0, pos - 1));
+    const head = pos > 0 ? '╸' : '';
+    const empty = '─'.repeat(width - pos);
+    const pctText = pct >= 99.95 ? '100%' : `${pct.toFixed(1)}%`;
+    asciiProgress.hidden = false;
+    asciiProgress.className = 'ascii-progress' + (mode ? ' ' + mode : '');
+    asciiProgress.innerHTML =
+      `<span class="fill">${filled}</span><span class="head">${head}</span><span>${empty}</span>` +
+      ` <span class="pct">${pctText}</span> <span class="time">${elapsed || '0:00:00'}</span>`;
+  }
+
+  /* ── 实时区 ── */
+  let lastLiveLen = -1;
+  function showLiveText(text, active) {
+    if (!text || text.length === lastLiveLen) return;
+    // 用户往上翻看历史时不强行拽回底部
+    const atBottom = liveBody.scrollHeight - liveBody.scrollTop - liveBody.clientHeight < 40;
+    lastLiveLen = text.length;
+    liveBody.innerHTML = '';
+    liveBody.appendChild(document.createTextNode(text));
+    if (active) {
+      const caret = document.createElement('span');
+      caret.className = 'caret';
+      liveBody.appendChild(caret);
+    }
+    if (atBottom) liveBody.scrollTop = liveBody.scrollHeight;
+  }
+
+  /* ── 任务列表：增量渲染 ──
+     800ms 全量 innerHTML 重绘会把 mousedown 与 mouseup 之间的 DOM 换掉，
+     导致点击丢失（按钮点不动）。改为按行签名比对，无变化就完全不碰 DOM。 */
+  const taskNodes = new Map();      // task_id -> {li, sig}
+  let lastOrderSig = '';
+  const archiveNodes = new Map();
+  let lastArchiveOrderSig = '';
+
+  function taskActions(t, qPos, qTotal) {
+    if (t.status === 'running') {
+      return t.cancel_requested
+        ? `<button class="tbtn cancelling" disabled title="正在等待最近一个切块结束">取消中…</button>`
+        : `<button class="tbtn danger" data-act="cancel" data-tid="${t.id}" title="在最近一个切块边界停止（延迟不超过一个切块）">取消</button>`;
+    }
+    if (t.status === 'queued') {
+      const up = qPos > 0
+        ? `<button class="tbtn" data-act="up" data-tid="${t.id}" title="上移">↑</button>`
+        : `<button class="tbtn" disabled title="已在队首">↑</button>`;
+      const down = qPos < qTotal - 1
+        ? `<button class="tbtn" data-act="down" data-tid="${t.id}" title="下移">↓</button>`
+        : `<button class="tbtn" disabled title="已在队尾">↓</button>`;
+      return `${up}${down}<button class="tbtn danger" data-act="del" data-tid="${t.id}" title="从队列中删除">删除</button>`;
+    }
+    if (t.status === 'done') {
+      return `<button class="tbtn" data-act="archive" data-tid="${t.id}" title="移入已归档任务，输出文件保留">归档</button>` +
+             `<button class="tbtn danger" data-act="del" data-tid="${t.id}" title="移除队列行（output/ 中的文件保留）">删除</button>`;
+    }
+    // 失败 / 已取消：只移除队列行，不删 output/ 里的文件
+    return `<button class="tbtn danger" data-act="del" data-tid="${t.id}" title="移除队列行（output/ 中的文件保留）">删除</button>`;
+  }
+
+  function renderTaskList() {
+    const activeTasks = state.tasks.filter(t => !t.archived);
+    const qIdx = {}; let qn = 0;
+    activeTasks.forEach(t => { if (t.status === 'queued') qIdx[t.id] = qn++; });
+    const qTotal = qn;
+    const stMap = { queued: '排队中', running: `转录中 %P% · ${'%E%'}`, done: `完成 · %E%`, failed: '失败', cancelled: '已取消' };
+    const seen = new Set();
+
+    activeTasks.forEach((t, i) => {
+      seen.add(t.id);
+      const loading = t.status === 'running' && (t.message || '').startsWith('加载模型');
+      const sig = JSON.stringify([i, t.id, t.status, Math.round(t.progress || 0),
+                                  t.format, t.error || '', t.output_name || '',
+                                  t.elapsed, !!t.cancel_requested, t.model_label || '', loading,
+                                  loading ? t.message : '']);
+      const rec = taskNodes.get(t.id);
+      if (rec && rec.sig === sig) return;          // 无变化 → 不碰 DOM，点击不会丢
+      if (rec) rec.li.remove();
+
+      const stTxt = loading
+        ? `${t.message} · ${t.elapsed}`
+        : (stMap[t.status] || t.status)
+          .replace('%P%', Math.round(t.progress || 0)).replace('%E%', t.elapsed);
+      const dl = t.status === 'done'
+        ? `<a href="/api/read-result?task_id=${t.id}" title="下载 ${esc(t.output_name || '')}">⬇</a>` : '';
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="idx">${String(i + 1).padStart(2, '0')}</span>
+        <span class="name">${esc(t.name)}${t.status === 'running' ? `<span class="rowbar"><span class="rowbar-fill" style="width:${clamp(t.progress || 0, 0, 100)}%"></span></span>` : ''}</span>
+        <span class="fmt">${t.format}</span><span class="mtag" title="本次任务使用的模型">${esc(t.model_label || '—')}</span>
+        <span class="tstate ${t.status}">${stTxt}${dl}</span>
+        <span class="task-actions">${taskActions(t, qIdx[t.id] ?? 0, qTotal)}</span>
+        ${t.status === 'failed' && t.error ? `<span class="terr">原因：${esc(t.error)}</span>` : ''}`;
+      taskNodes.set(t.id, { li, sig });
+      taskList.appendChild(li);
+    });
+
+    for (const [id, rec] of [...taskNodes]) {
+      if (!seen.has(id)) { rec.li.remove(); taskNodes.delete(id); }
+    }
+
+    // 只有顺序真的变了才重排（appendChild 移动已有节点，不重建）
+    const orderSig = activeTasks.map(t => t.id).join(',');
+    if (orderSig !== lastOrderSig) {
+      lastOrderSig = orderSig;
+      activeTasks.forEach(t => { const rec = taskNodes.get(t.id); if (rec) taskList.appendChild(rec.li); });
+    }
+  }
+
+  function renderArchiveList() {
+    const archivedTasks = state.tasks.filter(t => t.archived);
+    const seen = new Set();
+    archivedTasks.forEach((t, i) => {
+      seen.add(t.id);
+      const sig = JSON.stringify([i, t.id, t.name, t.format, t.elapsed, t.output_name || '', t.model_label || '']);
+      const rec = archiveNodes.get(t.id);
+      if (rec && rec.sig === sig) return;
+      if (rec) rec.li.remove();
+      const dl = t.output_name
+        ? `<a href="/api/read-result?task_id=${t.id}" title="下载 ${esc(t.output_name)}">⬇</a>` : '';
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="idx">${String(i + 1).padStart(2, '0')}</span>
+        <span class="name">${esc(t.name)}</span>
+        <span class="fmt">${t.format}</span><span class="mtag" title="本次任务使用的模型">${esc(t.model_label || '—')}</span>
+        <span class="tstate done">完成 · ${t.elapsed}${dl}</span>
+        <span class="task-actions"><button class="tbtn restore" data-act="restore" data-tid="${t.id}" title="恢复到任务队列">恢复</button><button class="tbtn danger" data-act="del" data-tid="${t.id}" title="删除归档记录（output/ 中的文件保留）">删除</button></span>`;
+      archiveNodes.set(t.id, { li, sig });
+      archiveList.appendChild(li);
+    });
+    for (const [id, rec] of [...archiveNodes]) {
+      if (!seen.has(id)) { rec.li.remove(); archiveNodes.delete(id); }
+    }
+    const orderSig = archivedTasks.map(t => t.id).join(',');
+    if (orderSig !== lastArchiveOrderSig) {
+      lastArchiveOrderSig = orderSig;
+      archivedTasks.forEach(t => { const rec = archiveNodes.get(t.id); if (rec) archiveList.appendChild(rec.li); });
+    }
+    archiveEmpty.hidden = archivedTasks.length > 0;
+    archiveCount.textContent = archivedTasks.length ? `${archivedTasks.length} 条任务` : '';
+  }
+
+  /* ── 渲染 ── */
+  function render() {
+    fileList.innerHTML = '';
+    const files = state.files;
+    const pageCount = Math.max(1, Math.ceil(files.length / FILE_PAGE_SIZE));
+    filePage = clamp(filePage, 1, pageCount);
+    const visibleFiles = files.slice((filePage - 1) * FILE_PAGE_SIZE, filePage * FILE_PAGE_SIZE);
+    fileEmpty.hidden = files.length > 0;
+    fileCount.textContent = files.length ? `${files.length}/${MAX_FILE_QUEUE} 个文件` : '';
+    filePager.hidden = files.length <= FILE_PAGE_SIZE;
+    filePageInfo.textContent = `${filePage} / ${pageCount}`;
+    filePrev.disabled = filePage <= 1;
+    fileNext.disabled = filePage >= pageCount;
+    for (const f of visibleFiles) {
+      const li = document.createElement('li');
+      if (!f.ok) li.className = 'bad';
+      const doneBtns = Object.entries(f.done_formats || {})
+        .map(([fmt, tid]) => `<button class="fmt-done" data-tid="${tid}" data-fmt="${fmt}" title="另存为 ${fmt} 结果">${fmt}</button>`).join('');
+      li.innerHTML = `
+        <input type="checkbox" data-fid="${f.id}" ${checked.has(f.id) ? 'checked' : ''} ${f.ok ? '' : 'disabled'} />
+        <span>
+          <span class="fname">${esc(f.name)}</span><br>
+          <span class="fpath" title="${esc(f.path)}">${f.managed_upload ? '<span class="upload-mark">本机临时副本</span>' : esc(f.path)}</span>
+          ${f.ok ? '' : `<br><span class="warn">⚠ ${esc(f.reason)}</span>`}
+        </span>
+        <span class="right">${doneBtns}<button class="rm" data-fid="${f.id}" title="移出文件队列（同时移除其排队中任务）">×</button></span>`;
+      fileList.appendChild(li);
+    }
+    const okFiles = files.filter(f => f.ok);
+    const checkedOk = okFiles.filter(f => checked.has(f.id)).length;
+    checkAll.checked = okFiles.length > 0 && checkedOk === okFiles.length;
+    checkAll.indeterminate = checkedOk > 0 && checkedOk < okFiles.length;
+    checkAll.disabled = okFiles.length === 0;
+
+    const activeTasks = state.tasks.filter(t => !t.archived);
+    const completedCount = activeTasks.filter(t => t.status === 'done').length;
+    taskEmpty.hidden = activeTasks.length > 0;
+    taskCount.textContent = activeTasks.length ? `${activeTasks.length} 条任务` : '';
+    archiveCompletedBtn.disabled = completedCount === 0;
+    renderTaskList();
+    renderArchiveList();
+
+    // 主进度条 + 实时区 + 状态徽章绑定当前任务
+    const current = activeTasks.find(t => t.status === 'running');
+    const queued = activeTasks.find(t => t.status === 'queued');
+    const lastDone = [...activeTasks].reverse().find(t => t.status === 'done');
+    const anyFailed = activeTasks.some(t => t.status === 'failed');
+    if (current) {
+      renderAsciiBar(current.progress, current.elapsed);
+      setState(`转录中 · ${current.name} · ${current.progress.toFixed(1)}%`, 'busy');
+      currentTaskName.textContent = current.name;
+      currentTaskDetail.textContent = `${current.format.toUpperCase()} · ${current.model_label || '模型未标记'} · ${current.message || '正在处理'}`;
+      liveChip.hidden = false;
+      if (current.partial_text) showLiveText(current.partial_text, true);
+    } else if (queued) {
+      renderAsciiBar(0, '0:00:00');
+      setState(`排队中 · 下一个：${queued.name}`, 'busy');
+      currentTaskName.textContent = `等待开始：${queued.name}`;
+      currentTaskDetail.textContent = `${queued.format.toUpperCase()} · ${queued.model_label || '模型未标记'}`;
+      liveChip.hidden = true;
+    } else if (lastDone) {
+      renderAsciiBar(100, lastDone.elapsed, anyFailed ? 'fail' : 'done');
+      setState(anyFailed ? '完成（有失败）' : '全部完成', anyFailed ? '' : 'on');
+      currentTaskName.textContent = `最近完成：${lastDone.name}`;
+      currentTaskDetail.textContent = `${lastDone.format.toUpperCase()} · ${lastDone.model_label || '模型未标记'} · ${lastDone.elapsed}`;
+      liveChip.hidden = true;
+      if (lastDone.partial_text) showLiveText(lastDone.partial_text, false);
+    } else {
+      asciiProgress.hidden = true;
+      const hasArchived = state.tasks.some(t => t.archived);
+      setState(hasArchived ? '暂无活动任务' : '等待文件', '');
+      currentTaskName.textContent = '尚无任务';
+      currentTaskDetail.textContent = hasArchived ? '完成记录已移入归档' : '等待文件加入队列';
+      liveChip.hidden = true;
+      if (!activeTasks.length) {
+        lastLiveLen = -1;
+        liveBody.innerHTML = '<span class="placeholder">// 识别到的内容会实时显示在这里</span>';
+      }
+    }
+  }
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/state');
+      state = await r.json();
+      const ids = new Set(state.files.map(f => f.id));
+      for (const id of [...checked]) if (!ids.has(id)) checked.delete(id);
+      render();
+      if (state.models) { renderModels(state.models); }
+    } catch (e) { /* 服务未就绪 */ }
+  }
+
+  /* ── 全选 ── */
+  checkAll.addEventListener('change', () => {
+    const okIds = state.files.filter(f => f.ok).map(f => f.id);
+    if (checkAll.checked) okIds.forEach(id => checked.add(id));
+    else okIds.forEach(id => checked.delete(id));
+    render();
+  });
+  filePrev.addEventListener('click', () => { if (filePage > 1) { filePage -= 1; render(); } });
+  fileNext.addEventListener('click', () => {
+    const pageCount = Math.max(1, Math.ceil(state.files.length / FILE_PAGE_SIZE));
+    if (filePage < pageCount) { filePage += 1; render(); }
+  });
+
+  /* ── 行内事件 ── */
+  fileList.addEventListener('change', (e) => {
+    const cb = e.target.closest('input[type="checkbox"][data-fid]');
+    if (!cb) return;
+    if (cb.checked) checked.add(cb.dataset.fid); else checked.delete(cb.dataset.fid);
+    render();
+  });
+  fileList.addEventListener('click', async (e) => {
+    const rm = e.target.closest('.rm');
+    if (rm) {
+      const r = await fetch('/api/files/remove', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ file_id: rm.dataset.fid }) });
+      const d = await r.json();
+      checked.delete(rm.dataset.fid);
+      toast(d.removed_tasks ? `已移除文件，同时移除 ${d.removed_tasks} 条排队中任务` : '已移除文件', 'ok');
+      log(d.removed_tasks ? `× 移除文件，联动移除 ${d.removed_tasks} 条排队中任务` : '× 移除文件');
+      refresh();
+      return;
+    }
+    const save = e.target.closest('.fmt-done');
+    if (save) saveResult(save.dataset.tid, save.dataset.fmt);
+  });
+
+  /* ── 任务行内操作：取消 / 删除 / ↑↓ 挪动 ── */
+  async function handleTaskAction(e) {
+    const btn = e.target.closest('[data-act]');
+    if (!btn || btn.disabled) return;
+    const tid = btn.dataset.tid, act = btn.dataset.act;
+    const t = state.tasks.find(x => x.id === tid);
+
+    if (act === 'cancel') {
+      if (!confirm(`确定取消「${t ? t.name : tid}」？\n\n` +
+                   `将在最近一个切块结束时停止（延迟不超过一个切块）。\n` +
+                   `已识别内容保留在页面上，但不会生成输出文件。`)) return;
+      const d = await postJSON(`/api/tasks/${tid}/cancel`, {});
+      if (d.ok) { toast('已请求取消，将在最近一个切块边界停止', 'warn'); }
+      else toast(d.detail || '取消失败', 'err');
+      refresh();
+      return;
+    }
+
+    if (act === 'up' || act === 'down') {
+      const d = await postJSON(`/api/tasks/${tid}/move`, { delta: act === 'up' ? -1 : 1 });
+      if (!d.ok) toast(d.detail || '挪动失败', 'err');
+      refresh();
+      return;
+    }
+
+    if (act === 'archive') {
+      const d = await postJSON(`/api/tasks/${tid}/archive`, {});
+      if (d.ok) toast(`已归档「${t ? t.name : ''}」（输出文件保留）`, 'ok');
+      else toast(d.detail || '归档失败', 'err');
+      refresh();
+      return;
+    }
+
+    if (act === 'restore') {
+      const d = await postJSON(`/api/tasks/${tid}/restore`, {});
+      if (d.ok) toast(`已恢复「${t ? t.name : ''}」到任务队列`, 'ok');
+      else toast(d.detail || '恢复失败', 'err');
+      refresh();
+      return;
+    }
+
+    if (act === 'del') {
+      const keepFile = t && t.status === 'done';
+      if (keepFile && !confirm(`删除任务「${t.name}」？\n\n只会移除这一行队列记录，\noutput/ 中已生成的文件会保留。`)) return;
+      const r = await fetch(`/api/tasks/${tid}`, { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) toast(keepFile ? `已移除「${t.name}」（output/ 文件保留）` : `已删除「${t ? t.name : ''}」`, 'ok');
+      else toast(d.detail || '删除失败', 'err');
+      refresh();
+      return;
+    }
+  }
+  taskList.addEventListener('click', handleTaskAction);
+  archiveList.addEventListener('click', handleTaskAction);
+
+  archiveCompletedBtn.addEventListener('click', async () => {
+    const completed = state.tasks.filter(t => !t.archived && t.status === 'done').length;
+    if (!completed || !confirm(`归档任务队列中的 ${completed} 条已完成任务？\n\n输出文件和文件队列中的下载入口都会保留。`)) return;
+    const d = await postJSON('/api/tasks/archive-completed', {});
+    if (d.ok) toast(`已归档 ${d.count} 条完成任务`, 'ok');
+    else toast(d.detail || '批量归档失败', 'err');
+    refresh();
+  });
+
+  /* ── 原生对话框（非阻塞） ── */
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  async function startPick(kind, btn) {
+    const label = kind === 'files' ? '文件' : '文件夹';
+    btn.disabled = true;
+    try {
+      const r = await fetch(kind === 'files' ? '/api/pick-files' : '/api/pick-folder', { method: 'POST' });
+      const d = await r.json();
+      if (!d.ok || !d.pick_id) { toast(d.error || '调起失败，请用粘贴框添加', 'err'); return; }
+      toast(`已调起原生${label}对话框（任务栏查看）`);
+      for (;;) {
+        await sleep(800);
+        const rr = await fetch(`/api/pick-result?pick_id=${d.pick_id}`);
+        const s = await rr.json();
+        if (s.status === 'pending') continue;
+        if (s.status === 'done') {
+          if (s.paths.length) await addPaths(s.paths);
+          else toast(kind === 'folder' ? '该文件夹下没有受支持的音视频文件' : '未选择任何文件', 'warn');
+        } else {
+          toast(s.error || '对话框不可用，请用粘贴框添加', 'err');
+        }
+        break;
+      }
+    } catch (e) {
+      toast('网络错误', 'err');
+    } finally {
+      btn.disabled = false;
+      refresh();
+    }
+  }
+  pickBtn.addEventListener('click', () => startPick('files', pickBtn));
+  pickFolderBtn.addEventListener('click', () => startPick('folder', pickFolderBtn));
+
+  /* ── 拖放文件：浏览器流式上传到本机 Lvats 临时目录 ── */
+  const DROP_SUFFIXES = new Set([
+    '.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac',
+    '.mp4', '.mov', '.mkv', '.webm', '.avi', '.ts', '.m4v',
+  ]);
+  let dragDepth = 0, dropBusy = false;
+
+  function hasDraggedFiles(e) {
+    return Array.from(e.dataTransfer?.types || []).includes('Files');
+  }
+
+  function uploadDroppedFile(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/files/drop?name=${encodeURIComponent(file.name)}`);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        let body = {};
+        try { body = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+        if (xhr.status >= 200 && xhr.status < 300 && body.ok) resolve(body.file);
+        else reject(new Error(body.detail || `上传失败（HTTP ${xhr.status}）`));
+      };
+      xhr.onerror = () => reject(new Error('本机连接中断'));
+      xhr.onabort = () => reject(new Error('上传已取消'));
+      xhr.send(file);
+    });
+  }
+
+  async function acceptDroppedFiles(items) {
+    if (dropBusy) { toast('已有拖放文件正在添加，请稍候', 'warn'); return; }
+    const all = Array.from(items || []);
+    let supported = all.filter(file => {
+      const dot = file.name.lastIndexOf('.');
+      return dot >= 0 && DROP_SUFFIXES.has(file.name.slice(dot).toLowerCase());
+    });
+    const rejected = all.length - supported.length;
+    if (!supported.length) {
+      toast(rejected ? '拖入内容中没有受支持的音频或视频文件' : '没有检测到文件', 'warn');
+      return;
+    }
+    const remaining = Math.max(0, MAX_FILE_QUEUE - state.files.length);
+    const overLimit = Math.max(0, supported.length - remaining);
+    supported = supported.slice(0, remaining);
+    if (!supported.length) {
+      toast(`文件队列最多 ${MAX_FILE_QUEUE} 个，请先移除文件`, 'warn');
+      return;
+    }
+
+    dropBusy = true;
+    fileDropZone.classList.add('uploading');
+    let added = 0;
+    const failures = [];
+    try {
+      for (let i = 0; i < supported.length; i++) {
+        const file = supported[i];
+        dropProgress.textContent = `正在添加 ${i + 1}/${supported.length}：${file.name} · 0%`;
+        try {
+          const record = await uploadDroppedFile(file, ratio => {
+            dropProgress.textContent = `正在添加 ${i + 1}/${supported.length}：${file.name} · ${Math.round(ratio * 100)}%`;
+          });
+          if (record?.id) added += 1;
+          filePage = Number.MAX_SAFE_INTEGER;
+          await refresh();
+        } catch (error) {
+          failures.push(`${file.name}：${error.message}`);
+        }
+      }
+    } finally {
+      dropBusy = false;
+      fileDropZone.classList.remove('uploading');
+      dropProgress.textContent = '';
+    }
+    if (added) {
+      toast(`已拖放添加 ${added} 个文件${rejected ? `，忽略 ${rejected} 个不支持的文件` : ''}${overLimit ? `，超出上限 ${overLimit} 个` : ''}`, failures.length || overLimit ? 'warn' : 'ok');
+      log(`⇩ 拖放添加 ${added} 个本机临时副本${rejected ? `，忽略 ${rejected} 个` : ''}`);
+      preloadSelectedModel();
+    }
+    if (failures.length) {
+      toast(`有 ${failures.length} 个文件添加失败：${failures[0]}`, 'err');
+      failures.forEach(message => log(message, 'err'));
+    }
+  }
+
+  fileDropZone.addEventListener('dragenter', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    dragDepth += 1;
+    fileDropZone.classList.add('drag-active');
+  });
+  fileDropZone.addEventListener('dragover', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  fileDropZone.addEventListener('dragleave', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) fileDropZone.classList.remove('drag-active');
+  });
+  fileDropZone.addEventListener('drop', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    fileDropZone.classList.remove('drag-active');
+    acceptDroppedFiles(e.dataTransfer.files);
+  });
+  window.addEventListener('dragover', (e) => { if (hasDraggedFiles(e)) e.preventDefault(); });
+  window.addEventListener('drop', (e) => { if (hasDraggedFiles(e)) e.preventDefault(); });
+
+  pasteAdd.addEventListener('click', async () => {
+    const paths = pasteBox.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (!paths.length) { toast('请先粘贴路径（每行一条）', 'warn'); return; }
+    await addPaths(paths);
+    pasteBox.value = '';
+    refresh();
+  });
+
+  async function addPaths(paths) {
+    const r = await fetch('/api/files/add', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ paths }) });
+    const d = await r.json();
+    if (!r.ok) { toast(d.detail || '添加文件失败', 'err'); return; }
+    const added = d.added || [];
+    const bad = added.filter(f => !f.ok).length;
+    if (added.length) filePage = Number.MAX_SAFE_INTEGER;
+    toast(`已添加 ${added.length} 个文件${d.skipped ? `，跳过重复 ${d.skipped}` : ''}${d.limited ? `，超出 ${d.limit} 个上限 ${d.limited} 个` : ''}${bad ? `，其中 ${bad} 个路径无效` : ''}`, bad || d.limited ? 'warn' : 'ok');
+    log(`+ 文件入队 ${added.length} 个${d.skipped ? `（跳过重复 ${d.skipped}）` : ''}${d.limited ? `（上限拒绝 ${d.limited}）` : ''}`);
+    preloadSelectedModel();
+  }
+
+  /* ── 格式按钮 → 创建任务 ── */
+  document.querySelectorAll('.fmt-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const ids = [...checked];
+      if (!ids.length) { toast('请先勾选要转录的文件', 'warn'); return; }
+      const r = await fetch('/api/tasks/add', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ file_ids: ids, format: btn.dataset.fmt, prompt: promptInput.value.trim(),
+                             model_id: modelSelect.value || null }) });
+      const d = await r.json();
+      if (d.skipped > 0) { toast(`已跳过 ${d.skipped} 条重复任务`, 'warn'); log(` 跳过 ${d.skipped} 条重复任务`, 'warn'); }
+      if (d.created > 0) { toast(`已创建 ${d.created} 条 ${btn.dataset.fmt} 任务`, 'ok'); log(`+ 创建 ${d.created} 条 ${btn.dataset.fmt} 任务`); }
+      if (d.created === 0 && d.skipped === 0) toast('未创建任务（勾选文件路径无效？）', 'err');
+      checked.clear();
+      refresh();
+    });
+  });
+
+  /* ── 另存为 ── */
+  async function preloadSelectedModel() {
+    try {
+      const r = await fetch('/api/preload', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({model_id: modelSelect.value || null})});
+      const d = await r.json();
+      if (!r.ok) log(`预加载失败：${d.detail || r.status}`, 'err');
+    } catch (e) { log(`预加载请求失败：${e.message}`, 'err'); }
+  }
+
+  async function saveResult(taskId, fmt) {
+    try {
+      const r = await fetch(`/api/read-result?task_id=${taskId}`);
+      if (!r.ok) { toast('结果不可用', 'err'); return; }
+      const blob = await r.blob();
+      const task = state.tasks.find(t => t.id === taskId);
+      const suggested = task ? task.output_name : `result.${fmt}`;
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({ suggestedName: suggested });
+          const w = await handle.createWritable();
+          await w.write(blob); await w.close();
+          toast('已保存到所选位置（output/ 原文件保留）', 'ok');
+          return;
+        } catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = suggested;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast('浏览器不支持另存为面板，已回退为下载', 'warn');
+    } catch (e) { toast('保存失败：' + e.message, 'err'); }
+  }
+
+  /* ══ 快捷提示词模块 ══ */
+  async function loadQuickPrompts() {
+    try {
+      const r = await fetch('/api/prompts');
+      quickPrompts = (await r.json()).prompts || [];
+      renderQuickPrompts();
+    } catch (e) { log('⚠ 快捷提示词加载失败', 'warn'); }
+  }
+  function renderQuickPrompts() {
+    quickPromptsList.innerHTML = '';
+    if (!quickPrompts.length) { quickPromptsGuide.hidden = false; return; }
+    quickPromptsGuide.hidden = true;
+    quickPrompts.forEach(p => {
+      const item = document.createElement('div');
+      item.className = 'qp-item' + (editingPromptId === p.id ? ' editing' : '');
+      item.dataset.id = p.id;
+      const name = esc(p.name);
+      const displayName = p.name.length > 8 ? name.slice(0, 8) + '…' : name;
+      const c = p.color || {r:255,g:160,b:60};
+      item.innerHTML = `
+        <span class="qp-dot" style="background:${rgbStyle(c)}" title="点击修改颜色"></span>
+        <span class="qp-box"><span class="qp-name" title="${name}">${displayName}</span></span>
+        <span class="qp-actions">
+          <button class="qp-edit" title="编辑">✎</button>
+          <button class="qp-delete" title="删除">🗑</button>
+        </span>`;
+      bindQpEvents(item, p);
+      quickPromptsList.appendChild(item);
+    });
+  }
+  function bindQpEvents(item, p) {
+    item.querySelector('.qp-box').addEventListener('click', () => {
+      if (editingPromptId === p.id) return;
+      const prev = promptInput.value;
+      promptInput.value = p.content;
+      promptInput.classList.add('flash');
+      setTimeout(() => promptInput.classList.remove('flash'), 500);
+      updateSaveBtnState();
+      if (prev && prev !== p.content) showUndoToast(prev);
+    });
+    item.querySelector('.qp-edit').addEventListener('click', (e) => { e.stopPropagation(); enterEditMode(p.id); });
+    item.querySelector('.qp-delete').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`确定删除快捷提示「${p.name}」？`)) return;
+      const r = await fetch(`/api/prompts/${p.id}`, { method: 'DELETE' });
+      if (r.ok) { quickPrompts = quickPrompts.filter(x => x.id !== p.id); renderQuickPrompts(); log(`🗑 已删除快捷提示：${p.name}`); }
+    });
+  }
+  function showUndoToast(prev) {
+    const existing = document.querySelector('.qp-toast');
+    if (existing) existing.remove();
+    if (qpToastTimer) clearTimeout(qpToastTimer);
+    const t = document.createElement('div');
+    t.className = 'qp-toast';
+    t.innerHTML = `<span>已加载，点击撤销</span><button>撤销</button>`;
+    t.querySelector('button').addEventListener('click', () => { promptInput.value = prev; updateSaveBtnState(); t.remove(); });
+    document.body.appendChild(t);
+    qpToastTimer = setTimeout(() => t.remove(), 5000);
+  }
+  function updateSaveBtnState() { savePromptBtn.disabled = !promptInput.value.trim(); }
+  promptInput.addEventListener('input', updateSaveBtnState);
+  savePromptBtn.addEventListener('click', () => {
+    const content = promptInput.value.trim();
+    if (!content || creatingPrompt) return;
+    creatingPrompt = true;
+    renderQuickPrompts();
+    const defaultName = content.slice(0, 10);
+    const color = PRESET_COLORS[quickPrompts.length % PRESET_COLORS.length];
+    const item = document.createElement('div');
+    item.className = 'qp-item editing';
+    item.innerHTML = `
+      <span class="qp-dot editing" style="background:${rgbStyle(color)}"></span>
+      <span class="qp-box"><input type="text" class="qp-name-input" value="${esc(defaultName)}" maxlength="30"></span>
+      <span class="qp-actions"><button class="qp-confirm" title="确认保存">🖋️</button></span>`;
+    quickPromptsList.appendChild(item);
+    quickPromptsGuide.hidden = true;
+    const input = item.querySelector('.qp-name-input');
+    input.focus(); input.select();
+    let mutableColor = { ...color };
+    const dot = item.querySelector('.qp-dot');
+    dot.addEventListener('click', (e) => { e.stopPropagation(); openColorPanel(dot, mutableColor, (c) => { mutableColor = c; }); });
+    const doSave = async () => {
+      const trimmed = input.value.trim();
+      if (!trimmed) return showInlineError(item, '名称不能为空');
+      if (trimmed.length > 30) return showInlineError(item, '名称不能超过 30 字符');
+      if (quickPrompts.some(p => p.name === trimmed)) return showInlineError(item, '名称已存在');
+      const r = await fetch('/api/prompts', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: trimmed, content, color: mutableColor }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { quickPrompts.push(d.prompt); creatingPrompt = false; renderQuickPrompts(); log(`✅ 已保存快捷提示：${trimmed}`, 'ok'); }
+      else showInlineError(item, d.detail || '保存失败');
+    };
+    item.querySelector('.qp-confirm').addEventListener('click', (e) => { e.stopPropagation(); doSave(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doSave();
+      if (e.key === 'Escape') { creatingPrompt = false; renderQuickPrompts(); }
+    });
+  });
+  function enterEditMode(id) {
+    if (editingPromptId && editingPromptId !== id) renderQuickPrompts();
+    editingPromptId = id;
+    renderQuickPrompts();
+    const item = quickPromptsList.querySelector(`.qp-item[data-id="${id}"]`);
+    if (!item) return;
+    const p = quickPrompts.find(x => x.id === id);
+    const dot = item.querySelector('.qp-dot');
+    const actions = item.querySelector('.qp-actions');
+    dot.classList.add('editing');
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'qp-name-input'; input.value = p.name; input.maxLength = 30;
+    item.querySelector('.qp-name').replaceWith(input);
+    input.focus(); input.select();
+    let newColor = { ...p.color }, colorDirty = false;
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'qp-confirm'; confirmBtn.textContent = '🖋️'; confirmBtn.title = '确认保存';
+    confirmBtn.style.opacity = '0.3'; confirmBtn.style.pointerEvents = 'none';
+    actions.prepend(confirmBtn);
+    const updateConfirm = () => {
+      const dirty = input.value.trim() !== p.name || colorDirty;
+      confirmBtn.style.opacity = dirty ? '1' : '0.3';
+      confirmBtn.style.pointerEvents = dirty ? 'auto' : 'none';
+    };
+    confirmBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const trimmed = input.value.trim();
+      if (!trimmed) return showInlineError(item, '名称不能为空');
+      if (trimmed.length > 30) return showInlineError(item, '名称不能超过 30 字符');
+      if (trimmed !== p.name && quickPrompts.some(x => x.name === trimmed && x.id !== p.id)) return showInlineError(item, '名称已存在');
+      const r = await fetch(`/api/prompts/${p.id}`, { method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: trimmed, color: newColor }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { Object.assign(p, d.prompt); editingPromptId = null; renderQuickPrompts(); log(`✎ 已更新快捷提示：${trimmed}`, 'ok'); }
+      else showInlineError(item, d.detail || '保存失败');
+    });
+    input.addEventListener('input', updateConfirm);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') confirmBtn.click();
+      if (e.key === 'Escape') { editingPromptId = null; renderQuickPrompts(); }
+    });
+    dot.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openColorPanel(dot, newColor, (c) => { newColor = c; colorDirty = true; updateConfirm(); });
+    });
+  }
+  function showInlineError(item, msg) {
+    let err = item.querySelector('.qp-error');
+    if (!err) { err = document.createElement('span'); err.className = 'qp-error'; item.appendChild(err); }
+    err.textContent = msg;
+  }
+  function openColorPanel(dot, initColor, onChange) {
+    const existing = document.querySelector('.qp-color-panel');
+    if (existing) existing.remove();
+    dot.classList.add('preview');
+    const originalColor = initColor;
+    const c = { ...initColor };
+    const panel = document.createElement('div');
+    panel.className = 'qp-color-panel';
+    const header = document.createElement('div');
+    header.style.cssText = 'font-family:var(--mono);font-size:11px;color:#8b94a7;letter-spacing:1.5px;margin-bottom:4px';
+    header.textContent = 'RGB 颜色';
+    panel.appendChild(header);
+    ['r','g','b'].forEach(ch => {
+      const row = document.createElement('div');
+      row.className = 'qp-color-row';
+      row.innerHTML = `<label>${ch.toUpperCase()}</label>`;
+      const num = document.createElement('input');
+      num.type = 'number'; num.min = 0; num.max = 255; num.value = c[ch];
+      const range = document.createElement('input');
+      range.type = 'range'; range.min = 0; range.max = 255; range.value = c[ch];
+      row.appendChild(num); row.appendChild(range);
+      const apply = (val) => {
+        c[ch] = clamp(parseInt(val, 10) || 0, 0, 255);
+        num.value = c[ch]; range.value = c[ch];
+        dot.style.background = rgbStyle(c);
+        dot.classList.add('preview');
+        dot.dataset.colorDirty = '1';
+        if (onChange) onChange(c);
+      };
+      num.addEventListener('input', () => apply(num.value));
+      range.addEventListener('input', () => apply(range.value));
+      panel.appendChild(row);
+    });
+    document.body.appendChild(panel);
+    const rect = dot.getBoundingClientRect();
+    const pr = panel.getBoundingClientRect();
+    let top = rect.top - pr.height - 8;
+    let left = rect.left - 90;
+    if (top < 10) top = rect.bottom + 8;
+    left = clamp(left, 10, window.innerWidth - pr.width - 10);
+    panel.style.left = `${left}px`; panel.style.top = `${top}px`;
+    function closePanel(e) {
+      if (!panel.contains(e.target) && !dot.contains(e.target)) {
+        if (!dot.dataset.colorDirty) dot.style.background = rgbStyle(originalColor);
+        dot.classList.remove('preview');
+        panel.remove();
+        document.removeEventListener('click', closePanel, true);
+      }
+    }
+    setTimeout(() => document.addEventListener('click', closePanel, true), 0);
+  }
+
+  /* ── 服务停止 / 重启 ── */
+  let shutdownRequested = false, restartRequested = false, restartToken = '', restartOldPid = null;
+  let downShown = false, refreshFailCount = 0, downPollTimer = null;
+
+  function showDownBanner(message, mode) {
+    downShown = true;
+    downBanner.hidden = false;
+    downBanner.className = mode === 'restart' ? 'restarting' : '';
+    downBanner.textContent = message || '⛔ 服务已停止，如需重启请双击 启动Lvats.bat';
+    if (evtSrc) { try { evtSrc.close(); } catch (_) {} evtSrc = null; }  // 服务已退出，停止 SSE 重连
+  }
+  function hideDownBanner() {
+    downShown = false; refreshFailCount = 0;
+    downBanner.className = '';
+    downBanner.hidden = true;
+  }
+
+  function restartFailed(reason) {
+    restartRequested = false;
+    restartBtn.disabled = false;
+    shutdownBtn.disabled = false;
+    const message = `❌ 重启失败：${reason}`;
+    showDownBanner(message, 'error');
+    log(message, 'err');
+    toast(message, 'err');
+  }
+
+  async function pollRestart() {
+    const deadline = Date.now() + 65000;
+    clearInterval(downPollTimer);
+    downPollTimer = setInterval(async () => {
+      try {
+        const healthResponse = await fetch('/api/health?t=' + Date.now(), { cache: 'no-store' });
+        const health = await healthResponse.json();
+        let status = {};
+        try { status = await (await fetch('/api/restart/status?t=' + Date.now(), { cache: 'no-store' })).json(); }
+        catch (_) {}
+        if (status.token === restartToken && status.phase === 'failed') {
+          clearInterval(downPollTimer);
+          restartFailed(status.message || '启动辅助进程报告失败');
+          return;
+        }
+        if (health.pid !== restartOldPid && health.version) {
+          if (status.token === restartToken && !['ready', 'failed'].includes(status.phase)) {
+            showDownBanner('↻ 新服务已启动，正在完成健康检查…', 'restart');
+            return;
+          }
+          clearInterval(downPollTimer);
+          restartRequested = false; shutdownRequested = false;
+          restartBtn.disabled = false; shutdownBtn.disabled = false;
+          hideDownBanner();
+          await refresh();
+          refreshHealth();
+          if (!evtSrc && !sseRetry) connectEvents();
+          const message = `✓ Lvats v${health.version} 重启完成，队列已恢复`;
+          log(message, 'ok'); toast(message, 'ok');
+          return;
+        }
+        const phaseText = status.token === restartToken && status.message ? status.message : '队列已保存，正在等待旧服务退出';
+        showDownBanner(`↻ 正在重启：${phaseText}`, 'restart');
+      } catch (e) {
+        showDownBanner('↻ 正在重启：旧服务已退出，等待新服务启动…', 'restart');
+      }
+      if (Date.now() > deadline) {
+        clearInterval(downPollTimer);
+        restartFailed('65 秒内未恢复服务，请查看 state 目录中的 restart 状态与日志');
+      }
+    }, 750);
+  }
+
+  restartBtn.addEventListener('click', async () => {
+    if (!confirm('确定重启 Lvats 服务？\n\n队列会先安全保存；运行中的任务将在新服务中重新排队并从头转录。')) return;
+    restartBtn.disabled = true;
+    shutdownBtn.disabled = true;
+    showDownBanner('↻ 正在重启：保存队列并安排新服务…', 'restart');
+    try {
+      const d = await postJSON('/api/restart', {});
+      if (!d.ok) { restartFailed(d.detail || '服务拒绝了重启请求'); return; }
+      restartRequested = true;
+      restartToken = d.token;
+      restartOldPid = d.old_pid;
+      log(`↻ 队列已保存，重启流程已开始${d.interrupted ? `；${d.interrupted} 个运行中任务将重新排队` : ''}`, 'warn');
+      pollRestart();
+    } catch (e) {
+      restartFailed(e.message || '无法发送重启请求');
+    }
+  });
+
+  shutdownBtn.addEventListener('click', async () => {
+    if (!confirm('确定停止 Lvats 服务？\n\n⚠ 将中断运行中的任务（运行中任务在切块边界停止，重启后会自动重新排队）。\n停止后页面不可用，需双击 启动Lvats.bat 重新启动。')) return;
+    shutdownRequested = true;
+    shutdownBtn.disabled = true;
+    try {
+      const d = await postJSON('/api/shutdown', {});
+      toast(d.ok ? '停止指令已发出，服务将在几秒内退出' : (d.detail || '停止失败'), d.ok ? 'warn' : 'err');
+    } catch (e) { /* 服务可能已立即退出 */ }
+    // 主动轮询确认服务消失（最多 15 秒），消失即显示停止提示
+    const t0 = Date.now();
+    clearInterval(downPollTimer);
+    downPollTimer = setInterval(async () => {
+      try {
+        await fetch('/api/health?t=' + Date.now(), { cache: 'no-store' });
+        if (Date.now() - t0 > 15000) { clearInterval(downPollTimer); }
+      } catch (e) {
+        clearInterval(downPollTimer);
+        showDownBanner();
+      }
+    }, 1000);
+  });
+
+  /* ── 健康 / 卸载 ── */
+  async function refreshHealth() {
+    try {
+      const d = await (await fetch('/api/health')).json();
+      verChip.lastChild.textContent = 'v' + (d.version || '—');
+      footVer.textContent = (d.name || 'Lvats') + ' v' + (d.version || '—');
+      gpuChip.className = 'chip ' + (d.cuda ? 'on' : '');
+      gpuChip.lastChild.textContent = d.cuda ? `GPU · ${d.gpu_name || 'CUDA'}` : 'GPU 不可用';
+      modelChip.className = 'chip ' + (d.model_loaded ? 'on' : '');
+      const info = d.device_info || {};
+      modelChip.lastChild.textContent = d.model_loaded
+        ? `已加载 · ${info.model_id || (info.model_path || '').split(/[\\/]/).pop() || '模型'}`
+          + (info.degraded ? ' · ⚠ CPU 降级' : '') : '模型未加载';
+      if (info.degraded) { modelChip.style.color = 'var(--err)'; }
+      else { modelChip.style.color = ''; }
+      unloadBtn.hidden = !d.model_loaded;
+      if (!restartRequested) {
+        hideDownBanner();
+        if (!evtSrc && !sseRetry) connectEvents();   // 非按钮重启后自动恢复 SSE
+      }
+    } catch (e) { /* 服务未就绪 */
+      refreshFailCount++;
+      if (!downShown && (shutdownRequested || refreshFailCount >= 3)) showDownBanner();
+    }
+  }
+  unloadBtn.addEventListener('click', async () => {
+    unloadBtn.disabled = true;
+    try {
+      const d = await (await fetch('/api/unload', { method: 'POST' })).json();
+      log(d.ok ? '⏏ 模型已卸载，显存已释放。' : `卸载失败：${d.detail}`, d.ok ? 'ok' : 'err');
+    } finally { unloadBtn.disabled = false; refreshHealth(); }
+  });
+
+  /* ── 多模型（v0.6.0） ── */
+  const modelSelect = $('modelSelect'), rescanBtn = $('rescanBtn'),
+        readyModels = $('readyModels'), modelMgmtInfo = $('modelMgmtInfo'),
+        dlPreset = $('dlPreset'), dlPresetBtn = $('dlPresetBtn'),
+        dlCustomRepo = $('dlCustomRepo'), dlCustomBtn = $('dlCustomBtn'),
+        dlStatus = $('dlStatus');
+  let builtinDownloads = [];
+  let lastModelsKey = '';
+  const LS_MODEL_KEY = 'lvats.lastModelId';
+
+  function modelFamily(m) {
+    if (m.engine === 'qwen') return 'Qwen3';
+    if (m.engine === 'faster-whisper') return 'faster-whisper';
+    return 'Others / 其他';
+  }
+  const FAMILY_ORDER = ['Qwen3', 'faster-whisper', 'Others / 其他'];
+
+  function renderModels(models) {
+    models = models || [];
+    // 800ms 轮询会频繁调用：模型集合没变就不重建 DOM，避免打断下拉交互
+    const key = models.map(m => m.id + ':' + m.label).join(',');
+    if (key === lastModelsKey) return;
+    lastModelsKey = key;
+    const cur = localStorage.getItem(LS_MODEL_KEY);
+    modelSelect.innerHTML = '';
+    // 按家族分组（v0.7.0）：Qwen3 / faster-whisper / Others
+    const groups = {};
+    models.forEach(m => { (groups[modelFamily(m)] = groups[modelFamily(m)] || []).push(m); });
+    FAMILY_ORDER.forEach(fam => {
+      const list = groups[fam] || [];
+      if (fam === 'Qwen3') list.sort((a, b) => {   // 体量升序：0.6B 优先于 1.7B
+        const sz = (m) => { const mt = (m.label || '').match(/(\d+(?:\.\d+)?)([BMK]b?)/i); return mt ? parseFloat(mt[1]) * ({'B':1e-3,'K':1e-6,'M':1,'G':1e3}[mt[2].toUpperCase()] || 1) : Infinity; };
+        return sz(a) - sz(b);
+      });
+      const og = document.createElement('optgroup');
+      og.label = fam + (list.length ? '' : '（暂无）');
+      list.forEach(m => {
+        const o = document.createElement('option');
+        o.value = m.id; o.textContent = m.label;
+        og.appendChild(o);
+      });
+      if (!list.length) {
+        const o = document.createElement('option');
+        o.disabled = true; o.textContent = '— 暂无可用模型 —';
+        og.appendChild(o);
+      }
+      modelSelect.appendChild(og);
+    });
+    if (cur && models.some(m => m.id === cur)) modelSelect.value = cur;
+    else {
+      // 无历史选择时默认 Qwen3 组里体量最小的（与服务端 default 同规则）
+      const qwenModels = groups['Qwen3'] || [];
+      if (qwenModels.length) modelSelect.value = qwenModels[0].id;
+    }
+    readyModels.innerHTML = models.length
+      ? FAMILY_ORDER.filter(fam => groups[fam]).map(fam =>
+          `<div class="fam-row"><span class="fam-name">${fam}</span>` +
+          (groups[fam].map(m => `<span class="ready-chip">${esc(m.label)}<span class="eng">${m.engine === 'faster-whisper' ? 'faster-whisper' : m.engine}</span></span>`).join('')) +
+          `</div>`).join('')
+      : '// 未发现可用模型：请检查 ./models/ 或点「重新扫描」';
+    modelMgmtInfo.textContent = `${models.length} 个模型就绪`;
+  }
+
+  modelSelect.addEventListener('change', () => {
+    try { localStorage.setItem(LS_MODEL_KEY, modelSelect.value); } catch (_) {}
+  });
+
+  function renderDlStatus(downloads) {
+    const lines = (downloads || []).slice(-3).map(d => {
+      const icon = d.status === 'queued' ? '⏳' : (d.status === 'running' ? '⬇' : (d.status === 'done' ? '✅' : '⚠'));
+      const size = d.status === 'running' && d.mb ? ` ${d.mb.toFixed(1)}MB` : '';
+      const err = d.status === 'error' ? ` ${d.error || ''}` : '';
+      return `${icon} ${d.name}：${d.status}${size}${err}`;
+    });
+    dlStatus.textContent = lines.length ? lines.join('　|　') : '';
+  }
+
+  rescanBtn.addEventListener('click', async () => {
+    rescanBtn.disabled = true;
+    try {
+      const d = await postJSON('/api/models/rescan', {});
+      if (d.ok) { renderModels(d.models); toast(`扫描完成：${d.models.length} 个模型就绪`, 'ok'); log(`⟳ 重新扫描：${d.models.length} 个模型就绪`); }
+    } finally { rescanBtn.disabled = false; }
+  });
+
+  async function startDownload(repoId) {
+    if (!repoId) { toast('请先选择或输入要下载的模型', 'warn'); return; }
+    try {
+      const d = await postJSON('/api/models/download', { repo_id: repoId });
+      if (d.ok) { toast(`已开始下载 ${d.name}，进度见下方状态行`, 'ok'); log(`⬇ 模型下载开始：${repoId} → models/${d.name}`); }
+      else toast(d.detail || '下载请求失败', 'err');
+    } catch (e) { toast('网络错误', 'err'); }
+  }
+  dlPresetBtn.addEventListener('click', () => startDownload(dlPreset.value));
+  dlCustomBtn.addEventListener('click', () => { startDownload(dlCustomRepo.value.trim()); });
+
+  /* ── SSE：日志 / 每块实时文本 / 三段耗时 / 设备实况 ── */
+  let evtSrc = null, sseRetry = null;
+  let lastEventId = '', streamId = '';
+
+  function fmtTiming(d) {
+    if (d.kind === 'prep')  return `[prep] 抽取16k wav ${d.prep_s}s（${d.cache_hit ? '缓存命中' : '新建'}）`;
+    if (d.kind === 'chunk') return `[chunk ${d.chunk}/${d.total}] 抽取 ${d.extract_s}s(缓存) | 识别 ${d.recog_s}s | 后处理 ${d.post_s}s`;
+    if (d.kind === 'cancelled') return `[cancel] 已在第 ${d.chunk}/${d.total} 块边界停止`;
+    return '';
+  }
+
+  function handleEvent(kind, d) {
+    if (kind === 'log') { log(d.text, d.level || 't'); return; }
+    if (kind === 'partial') {                       // 每块结束即推，不等整文件完成
+      const cur = state.tasks.find(t => t.id === d.task_id);
+      if (cur) { cur.partial_text = d.text; showLiveText(d.text, cur.status === 'running'); }
+      return;
+    }
+    if (kind === 'timing') { const line = fmtTiming(d); if (line) log(line, 't'); return; }
+    if (kind === 'task_start') { lastLiveLen = -1; refresh(); return; }
+    if (kind === 'task_end') { refresh(); return; }
+    if (kind === 'download') {
+      fetch('/api/models/download/status').then(r => r.json()).then(d => renderDlStatus(d.downloads)).catch(() => {});
+      if (d.status === 'done') { refresh(); refreshHealth(); }
+      return;
+    }
+    if (kind === 'models') { renderModels(d.models); return; }
+    if (kind === 'device') {
+      if (d.degraded) {
+        log(`⚠ CPU 降级：以下层被放到 CPU —— ${(d.cpu_layers || []).join(', ')}`, 'err');
+        toast('⚠ CPU 降级：部分层被放到 CPU，速度会极慢。请释放显存后重启', 'err');
+      }
+      return;
+    }
+  }
+
+  function connectEvents() {
+    clearTimeout(sseRetry); sseRetry = null;
+    if (evtSrc) { try { evtSrc.close(); } catch (_) {} }
+    const params = new URLSearchParams();
+    if (lastEventId) params.set('last_event_id', lastEventId);
+    if (streamId) params.set('stream_id', streamId);
+    const source = new EventSource('/api/events?' + params.toString());
+    evtSrc = source;
+    source.addEventListener('stream', e => {
+      const data = JSON.parse(e.data);
+      if (streamId !== data.stream_id) lastEventId = '';
+      streamId = data.stream_id;
+    });
+    for (const kind of ['log', 'partial', 'timing', 'task_start', 'task_end', 'device', 'download', 'models']) {
+      evtSrc.addEventListener(kind, (e) => {
+        if (evtSrc !== source) return;
+        if (e.lastEventId && Number(e.lastEventId) <= Number(lastEventId)) return;
+        if (e.lastEventId) lastEventId = e.lastEventId;
+        let d = {}; try { d = JSON.parse(e.data); } catch (_) {}
+        handleEvent(kind, d);
+      });
+    }
+    evtSrc.onerror = () => {
+      if (evtSrc !== source) return;
+      try { source.close(); } catch (_) {}
+      evtSrc = null;
+      if (downShown) return;                          // 服务已停止，不再重连
+      clearTimeout(sseRetry);
+      sseRetry = setTimeout(connectEvents, 2000);   // 新 EventSource 显式携带已接收游标
+    };
+  }
+
+  /* ── 初始化 ── */
+  log('服务已连接。等待文件……');
+  updateSaveBtnState();
+  loadQuickPrompts();
+  refresh();
+  refreshHealth();
+  connectEvents();
+  setInterval(refresh, 800);
+  setInterval(refreshHealth, 5000);
+  // 内置下载清单（一次性拉取）
+  fetch('/api/models').then(r => r.json()).then(d => {
+    builtinDownloads = d.builtin || [];
+    builtinDownloads.forEach(b => {
+      const o = document.createElement('option');
+      o.value = b.repo_id; o.textContent = `${b.label}　${b.repo_id}`;
+      dlPreset.appendChild(o);
+    });
+    renderModels(d.models || []);
+    renderDlStatus(d.downloads);
+  }).catch(() => {});
+})();
+</script>
+</body>
+</html>

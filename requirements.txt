@@ -1,0 +1,21 @@
+# Web 框架
+fastapi
+uvicorn[standard]
+python-multipart
+
+# 模型推理（Qwen3-ASR 需要 transformers >= 5.13.0）
+transformers>=5.13.0
+accelerate
+bitsandbytes>=0.45.0
+# torch：Windows 下 pip 默认轮子自带 CUDA；
+# 如需显式指定 CUDA 版本，可改用：
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+torch
+huggingface_hub
+
+# v0.6.0 多引擎：faster-whisper（CTranslate2）；Windows CUDA 运行时说明见 README
+faster-whisper
+
+# 音频解码（ffmpeg 需另行安装并在 PATH 中）
+librosa
+soundfile

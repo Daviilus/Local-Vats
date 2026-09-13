@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*.log
+
+.venv/
+.idea/
+.vscode/
+
+# Model weights are downloaded separately.
+models/
+Qwen3-ASR-*/
+Qwen3-ForcedAligner-*/
+*.safetensors
+*.bin
+
+# Local inputs, outputs, caches, certificates and runtime state.
+uploads/
+output/
+output.test/
+.dropcache/
+.dropcache.test/
+.wavcache/
+.wavcache.test/
+.cowork-temp/
+state/
+config/ssl/
+config/quick_prompts*.json
+
+# Internal development and handoff material.
+.agent/
+mailbox/
+v2_sample/
+docs/
+DEBUG_REPORT.md
+DECISIONS.md
+PROJECT_HANDOVER.md
+NOTIFY.md
+electric-aurora-turing-vFs7ZwDB.md
