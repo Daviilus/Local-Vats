@@ -14,6 +14,7 @@ import uuid
 BASE = Path(__file__).resolve().parents[1]
 FRONT_PORT = 8100
 BACKEND_PORT = 8101
+EXPECTED_VERSION = (BASE / 'VERSION').read_text(encoding='utf-8').strip()
 
 
 def serve(run: Path):
@@ -71,7 +72,7 @@ def main():
             except httpx.HTTPError as exc:
                 last_error = repr(exc)
                 time.sleep(0.15)
-        assert health and health['version'] == '1.0.0' and health['https'] and health['http_redirect'], {
+        assert health and health['version'] == EXPECTED_VERSION and health['https'] and health['http_redirect'], {
             'health': health, 'last_error': last_error,
         }
         redirect = client.get(f'http://127.0.0.1:{FRONT_PORT}/api/health?fresh=1',

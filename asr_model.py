@@ -43,7 +43,10 @@ import threading
 import time
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+import lvats_paths
+
+BASE_DIR = lvats_paths.APP_ROOT
+MODEL_DIR = lvats_paths.MODEL_DIR
 
 # 模型目录名容错（兼容大小写/写法差异）
 MODEL_DIR_CANDIDATES = [
@@ -53,13 +56,12 @@ MODEL_DIR_CANDIDATES = [
 ]
 ALIGNER_DIR_CANDIDATES = [
     os.environ.get("ASR_ALIGNER_DIR", ""),
-    "Qwen3-ForcedAligner-0.6B-hf",
-    "models/Qwen3-ForcedAligner-0.6B-hf",
-    "qwen3-forcedaligner-0.6b-hf",
+    str(MODEL_DIR / "Qwen3-ForcedAligner-0.6B-hf"),
+    str(MODEL_DIR / "qwen3-forcedaligner-0.6b-hf"),
 ]
 
-FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
-FFPROBE = shutil.which("ffprobe") or "ffprobe"
+FFMPEG = lvats_paths.resolve_bundled_tool("ffmpeg")
+FFPROBE = lvats_paths.resolve_bundled_tool("ffprobe")
 
 # ──────────────────────────────────────────────────────────────
 # 可调参数（全部支持环境变量覆盖，改完需重启生效）
@@ -86,7 +88,7 @@ BATCH_SIZE = int(os.environ.get("ASR_BATCH_SIZE", "4"))
 WAV_CACHE_MAX_MB = float(os.environ.get("ASR_WAV_CACHE_MAX_MB", "4096"))
 TEST_MODE = os.environ.get("ASR_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
 CACHE_DIR = Path(os.environ.get("ASR_WAV_CACHE_DIR", "") or
-                 (BASE_DIR / (".wavcache.test" if TEST_MODE else ".wavcache")))
+                 lvats_paths.WAV_CACHE_DIR)
 
 # 模型闲置多久后自动卸载（秒），默认 5 分钟
 IDLE_TIMEOUT_SECONDS = float(os.environ.get("ASR_IDLE_TIMEOUT", "300"))
@@ -238,7 +240,7 @@ def _find_dir(candidates: list[str]) -> Path | None:
     for name in candidates:
         if not name:
             continue
-        p = Path(name) if Path(name).is_absolute() else BASE_DIR / name
+        p = Path(name) if Path(name).is_absolute() else MODEL_DIR / name
         if p.exists():
             return p
     return None
@@ -249,7 +251,7 @@ def find_aligner_dir() -> Path | None:
     for name in ALIGNER_DIR_CANDIDATES:
         if not name:
             continue
-        path = Path(name) if Path(name).is_absolute() else BASE_DIR / name
+        path = Path(name) if Path(name).is_absolute() else MODEL_DIR / name
         has_weights = ((path / "model.safetensors").is_file()
                        or (path / "model.safetensors.index.json").is_file()
                        or (path / "pytorch_model.bin").is_file())
@@ -585,7 +587,8 @@ def _duration(path: Path) -> float:
 
 def _split_wav(wav: Path, seconds: int) -> list[Path]:
     """用 ffmpeg segment 把 wav 切成 <=seconds 秒的块。"""
-    out_dir = Path(tempfile.mkdtemp(prefix="asr_chunks_"))
+    lvats_paths.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(tempfile.mkdtemp(prefix="asr_chunks_", dir=lvats_paths.TEMP_DIR))
     cmd = [
         FFMPEG, "-y", "-nostdin", "-loglevel", "error",
         "-i", str(wav),

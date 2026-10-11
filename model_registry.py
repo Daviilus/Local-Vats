@@ -3,8 +3,8 @@
 model_registry.py — Lvats 多模型注册表（v0.6.0）
 
 约定：
-  - ./models/ 为用户模型根目录，一个子目录 = 一个模型（手动下载放进来即可）。
-  - 启动 / 「重新扫描」时扫描 ./models/* 与内置 Qwen 目录，登记到 state/registry.json。
+  - DATA_DIR/models 为用户模型根目录，一个子目录 = 一个模型（手动下载放进来即可）。
+  - 启动 / 「重新扫描」时只扫描统一模型目录，缓存写入 CACHE_DIR/registry.json。
   - 目录识别规则（识别不了就跳过并打日志，不报错）：
       * 含 model.bin + tokenizer.json            → faster-whisper 引擎（CTranslate2 格式）
       * config.json architectures 含 qwen3asr 且
@@ -20,17 +20,15 @@ import re
 import time
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
-MODELS_DIR = BASE_DIR / "models"
-_TEST_MODE = os.environ.get("ASR_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
-REGISTRY_FILE = BASE_DIR / "state" / ("registry.test.json" if _TEST_MODE else "registry.json")
+import lvats_paths
 
-# 内置 Qwen 模型目录（现有引擎，行为不变）
-QWEN_DIR_CANDIDATES = [
-    "Qwen3-ASR-1.7B-hf",
-    "qwen-3-asr-1.7B-Hf",
-    "qwen3-asr-1.7b-hf",
-]
+BASE_DIR = lvats_paths.APP_ROOT
+MODELS_DIR = lvats_paths.MODEL_DIR
+_TEST_MODE = lvats_paths.TEST_MODE
+REGISTRY_FILE = lvats_paths.CACHE_DIR / ("registry.test.json" if _TEST_MODE else "registry.json")
+
+# 所有下载和手动导入模型统一位于 DATA_DIR/models。
+QWEN_DIR_CANDIDATES: list[str] = []
 
 # 1.0.0 内置 ASR 模型清单。权重不随源码发布，首次正式启动时后台下载。
 BUILTIN_DOWNLOADS = [
@@ -106,13 +104,7 @@ def scan() -> dict[str, dict]:
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     for d in sorted(MODELS_DIR.iterdir()):
         if d.is_dir():
-            _scan_dir(d, "models/")
-
-    for name in QWEN_DIR_CANDIDATES:
-        d = BASE_DIR / name
-        if d.is_dir() and _detect_qwen(d):
-            reg[d.name] = _make_entry(d, "qwen")
-            break
+            _scan_dir(d, str(MODELS_DIR))
 
     return reg
 

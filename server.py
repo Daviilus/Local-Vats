@@ -29,7 +29,7 @@ v0.5.0 变更（保留）：
 
 端口：默认 8000，可用 ASR_PORT 覆盖（自检用 8001）。
 自检：ASR_PLACEHOLDER=1 时全程不加载真实模型，不占显存。
-测试隔离：ASR_TEST_MODE=1 时 output / queue 文件自动加 .test 后缀，不污染正式数据。
+测试隔离：ASR_TEST_MODE=1 时使用进程级临时数据根并加 .test 后缀，不污染正式数据。
 
 监听 127.0.0.1:{ASR_PORT}（正式端口默认 8000，固定）。
 """
@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import ipaddress
 import json
 import os
 import re
@@ -51,15 +52,18 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lvats_paths
 import asr_model  # 真实模型推理（int8/fp16 量化 + 强制对齐时间戳）
 import fw_engine  # v0.6.0：faster-whisper 引擎（faster_whisper 缺失时延迟报错，不影响启动）
-import model_registry  # v0.6.0：多模型注册表（./models/ 扫描 + registry.json）
+import model_registry  # 多模型注册表（统一 DATA_DIR/models 扫描 + cache/registry.json）
+import remote_api  # Explicitly selected third-party transcription; no local-model fallback.
 
 # stdout/stderr 重定向到文件/管道时默认跟随系统 ANSI 编码（cp936），
 # 打印 ▶ ✓ ■ ⚠ 等字符会 UnicodeEncodeError 并炸掉 worker 协程 —— 统一强制 UTF-8。
@@ -75,33 +79,68 @@ for _stream in (sys.stdout, sys.stderr):
 if os.name == "nt" and "/" in os.environ.get("TZ", ""):
     os.environ.pop("TZ", None)
 
-VERSION = "1.0.0"
+# 版本源唯一（执行计划 §7）：根目录 VERSION 是唯一人工维护源。
+# 冻结构建时由构建脚本生成 lvats_version 模块（从 VERSION 生成，禁止手改）；
+# 源码运行直接读根目录 VERSION；两者都缺失时才回落占位值并明牌告警。
+def _load_version() -> str:
+    try:
+        from lvats_version import VERSION as generated  # type: ignore[import-not-found]
+        return str(generated).strip()
+    except Exception:
+        pass
+    try:
+        text = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    print("[Lvats] 警告：未找到 VERSION 文件或 lvats_version 模块，版本显示为 0.0.0-dev。", flush=True)
+    return "0.0.0-dev"
+
+
+VERSION = _load_version()
 SERVICE_NAME = "Lvats"
 SERVICE_FULLNAME = "Lvats · Local Video/Audio Transform Service"
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = lvats_paths.APP_ROOT
+RESOURCE_ROOT = lvats_paths.RESOURCE_ROOT
+DATA_ROOT = lvats_paths.DATA_ROOT
+LOG_DIR = lvats_paths.LOG_DIR
+CACHE_DIR = lvats_paths.CACHE_DIR
+DATA_DIR = lvats_paths.DATA_DIR
+TEMP_DIR = lvats_paths.TEMP_DIR
+UPDATE_DIR = lvats_paths.UPDATE_DIR
 
-# 测试隔离：ASR_TEST_MODE=1 → output / queue 加 .test 后缀
-TEST_MODE = os.environ.get("ASR_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
+# 测试隔离由统一路径模块集中处理。
+TEST_MODE = lvats_paths.TEST_MODE
 _SUF = ".test" if TEST_MODE else ""
 
-OUTPUT_DIR = BASE_DIR / f"output{_SUF}"
-UPLOAD_DIR = BASE_DIR / f".dropcache{_SUF}"
-STATIC_DIR = BASE_DIR / "static"
-CONFIG_DIR = BASE_DIR / "config"
-STATE_DIR = BASE_DIR / "state"
+
+def https_default(environ, test_mode: bool, portable_mode: bool) -> bool:
+    """HTTPS 默认开关（D-81）：显式 ASR_HTTPS 优先；否则 Installed 默认开，
+    测试模式与 Portable 默认关（Portable 默认不触碰系统证书库）。"""
+    if "ASR_HTTPS" in environ:
+        return environ["ASR_HTTPS"].strip().lower() in ("1", "true", "yes")
+    return (not test_mode) and (not portable_mode)
+
+
+OUTPUT_DIR = lvats_paths.OUTPUT_DIR
+UPLOAD_DIR = lvats_paths.UPLOAD_DIR
+STATIC_DIR = RESOURCE_ROOT / "static"
+CONFIG_DIR = lvats_paths.CONFIG_DIR
+STATE_DIR = lvats_paths.STATE_DIR
 QUEUE_FILE = STATE_DIR / f"queue{_SUF}.json"
-PID_FILE = STATE_DIR / f"lvats{_SUF}.pid"
-RESTART_STATUS_FILE = STATE_DIR / f"restart{_SUF}.json"
-RESTART_HELPER = BASE_DIR / "scripts" / "restart_lvats.py"
+PID_FILE = lvats_paths.RUNTIME_DIR / f"lvats{_SUF}.pid"
+RESTART_STATUS_FILE = lvats_paths.RUNTIME_DIR / f"restart{_SUF}.json"
+RESTART_HELPER = RESOURCE_ROOT / "scripts" / "restart_lvats.py"
 QUICK_PROMPTS_FILE = CONFIG_DIR / f"quick_prompts{_SUF}.json"
 MAX_QUICK_PROMPTS = 20
 MAX_FILES = 50
 PORT = int(os.environ.get("ASR_PORT", "8000"))
-HTTPS_ENABLED = os.environ.get("ASR_HTTPS", "0" if TEST_MODE else "1").strip().lower() in ("1", "true", "yes")
+HTTPS_ENABLED = https_default(os.environ, TEST_MODE, lvats_paths.PORTABLE_MODE)
 HTTP_REDIRECT_ENABLED = os.environ.get("ASR_HTTP_REDIRECT", "1" if HTTPS_ENABLED else "0").strip().lower() in ("1", "true", "yes")
 TLS_BACKEND_PORT = int(os.environ.get("ASR_TLS_BACKEND_PORT", str(PORT + 443)))
-SSL_DIR = Path(os.environ.get("ASR_SSL_DIR") or (CONFIG_DIR / "ssl"))
+SSL_DIR = Path(os.environ.get("ASR_SSL_DIR") or lvats_paths.SSL_DIR)
 SSL_CERTFILE = Path(os.environ.get("ASR_SSL_CERTFILE") or (SSL_DIR / "lvats-cert.pem"))
 SSL_KEYFILE = Path(os.environ.get("ASR_SSL_KEYFILE") or (SSL_DIR / "lvats-key.pem"))
 SERVICE_SCHEME = "https" if HTTPS_ENABLED else "http"
@@ -111,7 +150,8 @@ SERVICE_URL = f"{SERVICE_SCHEME}://127.0.0.1:{PORT}"
 PERSIST_FIELDS = ("id", "path", "name", "format", "prompt", "status", "progress",
                   "partial_text", "warning", "error", "output_path", "output_name",
                   "created_at", "started_at", "finished_at", "duration", "message",
-                  "cancel_requested", "model_id", "managed_upload", "archived", "archived_at")
+                  "cancel_requested", "model_id", "managed_upload", "archived", "archived_at",
+                  "remote_revision", "remote_model")
 
 # ──────────────────────────────────────────────────────────────
 # 状态表
@@ -124,6 +164,8 @@ _dirty = False
 _preload_task = None
 _files_lock = threading.Lock()
 _drop_reservations = 0
+_REMOTE_OPERATIONS = set()
+_REMOTE_OPERATIONS_LOCK = threading.RLock()
 
 
 def _set_console_title(title: str):
@@ -507,7 +549,10 @@ def persist_now(strict: bool = False) -> bool:
                    "tasks": [_serializable(t) for t in TASKS.values()]}
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = QUEUE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False))
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(tmp, QUEUE_FILE)
         _dirty = False
         return True
@@ -552,7 +597,13 @@ def restore_queue():
         rec.setdefault("partial_text", "")
         rec.setdefault("archived", False)
         rec.setdefault("archived_at", None)
-        if rec.get("status") == "running":
+        if rec.get("status") == "running" and rec.get("model_id") == remote_api.REMOTE_MODEL_ID:
+            rec["status"] = "failed"
+            rec["error"] = "第三方任务在上次运行中被中断，可能已处理或收费；不会自动重新上传，请确认后手动创建新任务。"
+            rec["message"] = "API 中断任务需人工确认，不自动复跑。"
+            rec["finished_at"] = time.time()
+            rec["cancel_requested"] = False
+        elif rec.get("status") == "running":
             rec["status"] = "queued"
             rec["started_at"] = None
             rec["finished_at"] = None
@@ -641,9 +692,33 @@ async def _run_engine(t: dict, tid: str, tok, cb) -> dict:
     任何时刻显存内至多一个模型：切引擎前先卸载另一个（qwen↔fw 互斥）。
     异常直接抛出，由 worker 统一置 failed。
     """
+    if t.get("model_id") == remote_api.REMOTE_MODEL_ID:
+        revision = t.get("remote_revision")
+        if not revision:
+            raise RuntimeError("API 任务缺少配置版本，请确认配置后重新创建任务；未发送媒体。")
+        config = _remote_store().runtime(expected_revision=revision)
+        try:
+            # Commit the running state before any paid request can leave this process.
+            # Otherwise a crash could restore an already-uploaded task as queued.
+            persist_now(strict=True)
+        except Exception:
+            raise RuntimeError("API 任务执行状态无法安全保存，未发送媒体。") from None
+        finished = threading.Event()
+        with _REMOTE_OPERATIONS_LOCK:
+            _REMOTE_OPERATIONS.add(finished)
+        try:
+            return await remote_api.transcribe(
+                Path(t["path"]), config, prompt=t.get("prompt") or None,
+                progress_cb=cb, cancel=tok, need_timestamps=t["format"] in ("srt", "vtt"),
+                job_id=tid,
+            )
+        finally:
+            finished.set()
+            with _REMOTE_OPERATIONS_LOCK:
+                _REMOTE_OPERATIONS.discard(finished)
     entry = model_registry.resolve(t.get("model_id"))
     if entry is None:
-        raise RuntimeError("注册表中没有任何可用模型（请检查 ./models/ 与 Qwen 目录）")
+        raise RuntimeError(f"注册表中没有任何可用模型（请检查 {model_registry.MODELS_DIR}）")
     if entry["id"] != t.get("model_id"):
         _log("warn", f"任务指定模型 {t.get('model_id')} 不可用，回退默认 {entry['label']}",
              task_id=tid)
@@ -681,7 +756,12 @@ def _transcribe_selected(entry, t, tid, tok, cb):
 
 async def _worker():
     while True:
+        if _shutdown_started:
+            return  # Leave queued work persisted; never start another paid request.
         tid = await TASK_QUEUE.pop_next()
+        if _shutdown_started:
+            TASK_QUEUE.load([tid, *TASK_QUEUE.snapshot()])
+            return
         t = TASKS.get(tid)
         if t is None:
             continue
@@ -707,6 +787,8 @@ async def _worker():
             try:
                 result = await _run_engine(t, tid, tok, _make_cb(tid))
                 if result.get("cancelled"):
+                    if result.get("warning"):
+                        t["warning"] = result["warning"]
                     _finish(t, "cancelled", partial=result.get("text", ""))
                     _log("warn", f"■ 已取消：{t['name']}（保留已识别部分，未生成文件）", task_id=tid)
                 else:
@@ -750,10 +832,12 @@ async def _worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global TASK_QUEUE, BUS
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lvats_paths.ensure_directories()
+    # Test harnesses and supported ASR_* overrides may replace individual paths
+    # after import; initialize the effective paths as well as the default layout.
+    for directory in (OUTPUT_DIR, UPLOAD_DIR, CONFIG_DIR, STATE_DIR,
+                      PID_FILE.parent, RESTART_STATUS_FILE.parent):
+        directory.mkdir(parents=True, exist_ok=True)
 
     BUS = EventBus()
     BUS.bind_loop(asyncio.get_running_loop())
@@ -770,8 +854,9 @@ async def lifespan(app: FastAPI):
         import torch
         _cuda_ok = torch.cuda.is_available()
         _torch_ver = torch.__version__
-    except Exception:
+    except Exception as exc:
         _cuda_ok, _torch_ver = False, "未安装"
+        _log("err", f"CUDA 自检异常：{type(exc).__name__}: {exc}")
     if not _cuda_ok:
         _log("err", "⚠ CUDA 不可用：当前 Python 的 torch 可能是 CPU 版（" + _torch_ver +
                    "）或 GPU 被占用/驱动异常。请用 启动Lvats.bat 启动（它锁定带 CUDA torch 的运行时）。")
@@ -806,6 +891,119 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=SERVICE_FULLNAME, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+_REMOTE_STORES = {}
+_REMOTE_STORES_LOCK = threading.RLock()
+
+
+def _remote_store():
+    # One locked store per effective path, including isolated test overrides.
+    path = (CONFIG_DIR / f"remote-api{_SUF}.json").resolve()
+    with _REMOTE_STORES_LOCK:
+        if path not in _REMOTE_STORES:
+            _REMOTE_STORES[path] = remote_api.ConfigStore(path)
+        return _REMOTE_STORES[path]
+
+
+def _web_models():
+    models = model_registry.all_models()
+    settings = _remote_store().public()
+    if settings.get("ready"):
+        models = [*models, {"id": remote_api.REMOTE_MODEL_ID, "engine": "remote-api",
+                           "label": "API · " + settings["model"], "ready": True,
+                           "revision": settings["revision"]}]
+    return models
+
+
+def _require_local_ui(request):
+    """Require an explicit same-origin local UI request for credential changes/uploads."""
+    message = "此操作仅允许 Lvats 本机页面发起的同源请求。"
+    if request is None or request.headers.get("x-lvats-request") != "1":
+        raise HTTPException(status_code=403, detail=message)
+    if request.client is None:
+        raise HTTPException(status_code=403, detail=message)
+    try:
+        peer = ipaddress.ip_address(request.client.host)
+        if not peer.is_loopback:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=403, detail=message) from None
+    try:
+        target = urlsplit(str(request.url))
+        if target.hostname not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError
+        origin = request.headers.get("origin")
+        if origin:
+            parsed = urlsplit(origin)
+            def authority(value):
+                return (value.scheme, value.hostname,
+                        value.port or (443 if value.scheme == "https" else 80))
+            if (parsed.username or parsed.password or parsed.query or parsed.fragment
+                    or parsed.path not in ("", "/") or authority(parsed) != authority(target)):
+                raise ValueError
+        if request.headers.get("sec-fetch-site") not in (None, "same-origin", "none"):
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=403, detail=message) from None
+
+
+_REMOTE_PAGE_HEADERS = {
+    "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                               "style-src 'self' 'unsafe-inline'; connect-src 'self'; "
+                               "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+}
+
+
+@app.middleware("http")
+async def protect_remote_responses(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path in ("/api-settings", "/static/api.html", "/api/remote/config"):
+        for key, value in _REMOTE_PAGE_HEADERS.items():
+            response.headers[key] = value
+    return response
+
+
+@app.get("/api-settings")
+async def remote_settings_page():
+    return FileResponse(STATIC_DIR / "api.html", headers=_REMOTE_PAGE_HEADERS)
+
+
+@app.get("/api/remote/config")
+async def api_remote_config(request: Request):
+    _require_local_ui(request)
+    return _remote_store().public()
+
+
+@app.put("/api/remote/config")
+async def api_remote_config_update(request: Request):
+    _require_local_ui(request)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
+        raise HTTPException(status_code=415, detail="配置需以 JSON 提交。")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 16384:
+            raise HTTPException(status_code=413, detail="配置内容过大。")
+    try:
+        payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise ValueError
+    except (ValueError, UnicodeError):
+        raise HTTPException(status_code=400, detail="配置内容不是有效 JSON 对象。") from None
+    store = _remote_store()
+    expected_revision = payload.pop("expected_revision", None)
+    if expected_revision != store.public()["revision"]:
+        raise HTTPException(status_code=409, detail="配置已被更新，请重新读取后确认保存。")
+    try:
+        settings = store.update(payload)
+    except remote_api.RemoteAPIError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    if BUS:
+        BUS.publish("models", models=_web_models())
+    return settings
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1192,17 +1390,33 @@ async def api_files_remove(payload: dict):
 # 任务队列
 # ──────────────────────────────────────────────────────────────
 @app.post("/api/tasks/add")
-async def api_tasks_add(payload: dict):
+async def api_tasks_add(payload: dict, request: Request = None):
+    if _shutdown_started:
+        raise HTTPException(status_code=409, detail="服务正在停止或重启，不再接受新任务。")
     fids = payload.get("file_ids") or []
     fmt = (payload.get("format") or "").lower().strip()
     prompt = (payload.get("prompt") or "").strip()
     model_id = (payload.get("model_id") or "").strip() or None   # v0.6.0：任务级模型选择
     if fmt not in {"txt", "srt", "vtt"}:
         raise HTTPException(status_code=400, detail="format 只能是 txt / srt / vtt")
-    if model_id and not model_registry.get(model_id):
+    remote_settings = None
+    if model_id == remote_api.REMOTE_MODEL_ID:
+        _require_local_ui(request)
+        if payload.get("remote_consent") is not True:
+            raise HTTPException(status_code=400, detail="请先确认将音频发送到第三方 API（可能产生费用）。")
+        try:
+            remote_settings = _remote_store().public()
+            if payload.get("remote_revision") != remote_settings["revision"]:
+                raise HTTPException(status_code=409, detail="API 配置已改变，请刷新选项并重新确认后创建任务；未发送媒体。")
+            _remote_store().runtime(expected_revision=remote_settings["revision"])
+        except remote_api.RemoteAPIError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+    elif model_id and not model_registry.get(model_id):
         raise HTTPException(status_code=400, detail=f"模型 {model_id} 不在注册表中，请先重新扫描或下载")
     if not model_id:
         model_id = (model_registry.default_entry() or {}).get('id')
+        if not model_id:
+            raise HTTPException(status_code=400, detail="本地模型尚未就绪；请下载模型或明确选择已配置的第三方 API。")
 
     created = skipped = 0
     for fid in fids:
@@ -1224,6 +1438,8 @@ async def api_tasks_add(payload: dict):
             "partial_text": "", "warning": None,
             "output_path": None, "output_name": None, "full_text": "",
             "duration": 0.0, "cancel_requested": False, "model_id": model_id,
+            "remote_revision": remote_settings["revision"] if remote_settings else None,
+            "remote_model": remote_settings["model"] if remote_settings else None,
             "managed_upload": bool(f.get("managed_upload")),
             "archived": False, "archived_at": None,
             "created_at": time.time(), "started_at": None, "finished_at": None,
@@ -1397,7 +1613,10 @@ async def api_state():
     tasks = []
     for t in _ordered_tasks():
         el_text, _ = _task_elapsed(t)
-        m_entry = model_registry.get(t.get("model_id")) or model_registry.default_entry()
+        if t.get("model_id") == remote_api.REMOTE_MODEL_ID:
+            m_entry = {"label": "API · " + (t.get("remote_model") or "第三方")}
+        else:
+            m_entry = model_registry.get(t.get("model_id")) or model_registry.default_entry()
         tasks.append({
             "id": t["id"], "path": t["path"], "name": t["name"], "format": t["format"],
             "status": t["status"], "error": t["error"], "progress": t["progress"],
@@ -1412,7 +1631,7 @@ async def api_state():
         })
     return {"files": files, "tasks": tasks,
             "order": TASK_QUEUE.snapshot() if TASK_QUEUE else [],
-            "models": model_registry.all_models(),
+            "models": _web_models(),
             "version": VERSION}
 
 
@@ -1585,15 +1804,27 @@ def _read_restart_status() -> dict:
         return {"phase": "failed", "message": f"无法读取重启状态：{e}"}
 
 
+def restart_helper_command(helper: Path, extra: list[str]) -> list[str]:
+    """冻结版用 ``Lvats.exe --restart-helper`` 自身兼任 helper；开发版用 Python 跑脚本。"""
+    command = [sys.executable]
+    if getattr(sys, "frozen", False):
+        command.append("--restart-helper")
+    else:
+        command.append(str(helper))
+    return command + extra
+
+
 def _restart_preflight():
     if os.name != "nt":
         raise RuntimeError("自动重启目前只支持 Windows 本机服务")
-    if not RESTART_HELPER.is_file():
-        raise RuntimeError(f"缺少重启辅助程序：{RESTART_HELPER}")
+    if not getattr(sys, "frozen", False):
+        # 冻结版由 Lvats.exe 自身兼任重启辅助程序，无需独立脚本文件
+        if not RESTART_HELPER.is_file():
+            raise RuntimeError(f"缺少重启辅助程序：{RESTART_HELPER}")
     if not Path(sys.executable).is_file():
         raise RuntimeError(f"当前运行程序不存在：{sys.executable}")
-    if not TEST_MODE:
-        starter = BASE_DIR / "scripts" / "start_lvats.ps1"
+    if not TEST_MODE and not getattr(sys, "frozen", False):
+        starter = RESOURCE_ROOT / "scripts" / "start_lvats.ps1"
         powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
         if not starter.is_file():
             raise RuntimeError(f"缺少 Windows 启动脚本：{starter}")
@@ -1602,8 +1833,7 @@ def _restart_preflight():
 
 
 def _spawn_restart_helper(token: str) -> int:
-    command = [
-        sys.executable, str(RESTART_HELPER),
+    extra = [
         "--project-root", str(BASE_DIR),
         "--port", str(PORT),
         "--old-pid", str(os.getpid()),
@@ -1613,10 +1843,11 @@ def _spawn_restart_helper(token: str) -> int:
         "--scheme", SERVICE_SCHEME,
     ]
     if TEST_MODE:
-        command.append("--test-mode")
+        extra.append("--test-mode")
         test_command = os.environ.get("ASR_RESTART_TEST_COMMAND", "").strip()
         if test_command:
-            command.extend(["--test-command-json", test_command])
+            extra.extend(["--test-command-json", test_command])
+    command = restart_helper_command(RESTART_HELPER, extra)
     flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
              | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
              | getattr(subprocess, "DETACHED_PROCESS", 0))
@@ -1644,10 +1875,22 @@ def _interrupt_running_tasks() -> int:
     return interrupted
 
 
+def _wait_remote_cleanup(timeout: float = 5.0):
+    deadline = time.monotonic() + timeout
+    with _REMOTE_OPERATIONS_LOCK:
+        pending = list(_REMOTE_OPERATIONS)
+    for finished in pending:
+        if not finished.wait(max(0.0, deadline - time.monotonic())):
+            return False
+    return True
+
+
 def _schedule_process_exit(delay: float = 2.0):
     def _do_exit():
-        persist_now()  # 二次落盘；首次严格落盘已在重启辅助进程启动前完成
-        time.sleep(delay)  # 给响应留出回到前端的时间
+        time.sleep(delay)  # Give the response time to reach the browser.
+        if not _wait_remote_cleanup():
+            _log("warn", "API 请求取消清理未在停止窗口内完成；强制退出可能保留临时音频。")
+        persist_now()  # Persist the actual remote cancellation result before exit.
         _remove_owned_pid_file()
         os._exit(0)
 
@@ -1682,7 +1925,7 @@ async def api_restart():
     _shutdown_started = True
     interrupted = _interrupt_running_tasks()
     _log("warn", f"[{SERVICE_NAME}] 收到重启请求：队列已保存，"
-                 f"{interrupted} 个运行中任务将在新进程中重新排队。")
+                 f"{interrupted} 个运行中任务已请求中断；API 不自动重新上传。")
     _schedule_process_exit()
     return {
         "ok": True,
@@ -1733,6 +1976,8 @@ async def api_unload():
 async def api_preload(payload: dict | None = None):
     global _preload_task
     model_id = (payload or {}).get('model_id')
+    if model_id == remote_api.REMOTE_MODEL_ID:
+        return {"ok": True, "skipped": True, "reason": "第三方 API 不预加载本地模型。"}
     entry = model_registry.get(model_id) if model_id else model_registry.default_entry()
     if entry is None:
         raise HTTPException(status_code=400, detail="所选模型不可用，请先重新扫描模型。")
@@ -1811,6 +2056,8 @@ async def api_health():
             "aligner_available": asr_model.aligner_available(),
             "placeholder": asr_model.USE_PLACEHOLDER,
             "test_mode": TEST_MODE,
+            "portable_mode": lvats_paths.PORTABLE_MODE,
+            "data_root": str(DATA_ROOT),
             "device_info": info,
             "wav_cache": asr_model.wav_cache.stats()}
     if not _torch_ok():
@@ -1841,7 +2088,7 @@ def _queue_download(repo_id: str, name: str, *, note: str = "",
     if start_immediately:
         threading.Thread(target=_download_worker, args=(did, repo_id, name),
                          name=f"dl-{name}", daemon=True).start()
-    _log("t", f"[模型下载] 已排队：{repo_id} → models/{name}")
+    _log("t", f"[模型下载] 已排队：{repo_id} → {model_registry.MODELS_DIR / name}")
     return did
 
 
@@ -1870,13 +2117,13 @@ def _queue_initial_model_downloads():
 
 def _rescan_and_publish():
     reg = model_registry.rescan()
-    BUS.publish("models", models=list(reg.values()))
+    BUS.publish("models", models=_web_models())
     return reg
 
 
 @app.get("/api/models")
 async def api_models():
-    return {"models": model_registry.all_models(),
+    return {"models": _web_models(),
             "builtin": model_registry.BUILTIN_DOWNLOADS,
             "downloads": list(DOWNLOAD_JOBS.values())}
 
@@ -1886,7 +2133,7 @@ async def api_models_rescan():
     reg = _rescan_and_publish()
     _log("ok", f"[多模型] 重新扫描完成：{len(reg)} 个模型（"
                f"{', '.join(m['label'] for m in reg.values()) or '无'}）")
-    return {"ok": True, "models": list(reg.values())}
+    return {"ok": True, "models": _web_models()}
 
 
 def _download_worker(did: str, repo_id: str, name: str):
@@ -1908,7 +2155,7 @@ def _download_worker(did: str, repo_id: str, name: str):
     threading.Thread(target=_poll_size, name=f"dl-poll-{name}", daemon=True).start()
     try:
         from huggingface_hub import snapshot_download
-        _log("t", f"[模型下载] 开始 {repo_id} → models/{name}"
+        _log("t", f"[模型下载] 开始 {repo_id} → {target}"
                    f"（镜像：{os.environ.get('HF_ENDPOINT') or '官方源'}）")
         snapshot_download(repo_id=repo_id, local_dir=str(target))
         job["status"] = "done"
@@ -1920,7 +2167,7 @@ def _download_worker(did: str, repo_id: str, name: str):
         job["error"] = str(e)[:300]
         BUS.publish("download", did=did, name=name, repo_id=repo_id,
                     status="error", error=job["error"])
-        _log("err", f"[模型下载] 失败 {repo_id}：{e}（半成品目录已保留 models/{name}，可重试）")
+        _log("err", f"[模型下载] 失败 {repo_id}：{e}（半成品目录已保留 {target}，可重试）")
 
 
 @app.post("/api/models/download")
@@ -1932,10 +2179,10 @@ async def api_models_download(payload: dict):
     if not name or name != sanitize_filename(name):
         raise HTTPException(status_code=400, detail=f"目录名非法：{name}")
     if (model_registry.MODELS_DIR / name).exists() and model_registry.get(name):
-        raise HTTPException(status_code=409, detail=f"models/{name} 已存在且已注册，无需下载")
+        raise HTTPException(status_code=409, detail=f"{model_registry.MODELS_DIR / name} 已存在且已注册，无需下载")
     did = _queue_download(repo_id, name)
     if did is None:
-        raise HTTPException(status_code=409, detail=f"models/{name} 已存在且已注册，无需下载")
+        raise HTTPException(status_code=409, detail=f"{model_registry.MODELS_DIR / name} 已存在且已注册，无需下载")
     return {"ok": True, "download_id": did, "name": name}
 
 
@@ -2044,7 +2291,8 @@ async def _serve_https_with_redirect(uvicorn_module):
             await backend_task
 
 
-if __name__ == "__main__":
+def serve():
+    """启动 uvicorn（含同端口 HTTPS 网关）。开发入口与冻结版 Lvats.exe 共用。"""
     import uvicorn
     _set_console_title(SERVICE_NAME)
     print(f"[{SERVICE_NAME}] v{VERSION} 启动：{SERVICE_URL}", flush=True)
@@ -2052,3 +2300,7 @@ if __name__ == "__main__":
         asyncio.run(_serve_https_with_redirect(uvicorn))
     else:
         uvicorn.run(app, **_uvicorn_kwargs())
+
+
+if __name__ == "__main__":
+    serve()

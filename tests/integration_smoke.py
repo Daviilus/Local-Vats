@@ -1,4 +1,4 @@
-"""8001-only placeholder API/browser smoke; writes only a unique test directory."""
+"""Isolated placeholder browser smoke; default 8001, override ASR_SMOKE_PORT."""
 import argparse
 import hashlib
 import json
@@ -12,8 +12,12 @@ import uuid
 import wave
 
 BASE = Path(__file__).resolve().parents[1]
+EXPECTED_VERSION = (BASE / 'VERSION').read_text(encoding='utf-8').strip()
 sys.path.insert(0, str(BASE))
-URL = 'http://127.0.0.1:8001'
+TEST_PORT = int(os.environ.get('ASR_SMOKE_PORT', '8001'))
+if not 1024 <= TEST_PORT <= 65535 or TEST_PORT == 8000:
+    raise ValueError('ASR_SMOKE_PORT must be a non-production port from 1024 to 65535')
+URL = f'http://127.0.0.1:{TEST_PORT}'
 
 
 def prepare_models(root: Path):
@@ -32,7 +36,7 @@ def prepare_models(root: Path):
 
 
 def serve(directory):
-    os.environ.update(ASR_TEST_MODE='1', ASR_PLACEHOLDER='1', ASR_PORT='8001',
+    os.environ.update(ASR_TEST_MODE='1', ASR_PLACEHOLDER='1', ASR_PORT=str(TEST_PORT),
                       ASR_PLACEHOLDER_SLOW='1', ASR_WAV_CACHE_DIR=str(directory / 'cache'),
                       ASR_RESTART_TEST_COMMAND=json.dumps(
                           [sys.executable, __file__, '--serve', str(directory)]))
@@ -49,14 +53,14 @@ def serve(directory):
     server.model_registry.REGISTRY_FILE = server.STATE_DIR / 'registry.test.json'
     server.model_registry.MODELS_DIR = directory / 'models'
     server.model_registry.QWEN_DIR_CANDIDATES = []
-    uvicorn.run(server.app, host='127.0.0.1', port=8001, log_level='warning')
+    uvicorn.run(server.app, host='127.0.0.1', port=TEST_PORT, log_level='warning')
 
 
 def main():
     import httpx
     from playwright.sync_api import sync_playwright
     with socket.socket() as probe:
-        assert probe.connect_ex(('127.0.0.1', 8001)) != 0, '8001 already occupied'
+        assert probe.connect_ex(('127.0.0.1', TEST_PORT)) != 0, f'{TEST_PORT} already occupied'
     run = BASE / '.cowork-temp' / ('v100-smoke-' + uuid.uuid4().hex[:8])
     run.mkdir(parents=True)
     prepare_models(run / 'models')
@@ -100,7 +104,7 @@ def main():
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         health = wait_for(lambda: api('/api/health'))
         assert health['placeholder'] and health['test_mode']
-        assert health['version'] == '1.0.0'
+        assert health['version'] == EXPECTED_VERSION
 
     def stop():
         try:
@@ -112,10 +116,10 @@ def main():
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             with socket.socket() as probe:
-                if probe.connect_ex(('127.0.0.1', 8001)) != 0:
+                if probe.connect_ex(('127.0.0.1', TEST_PORT)) != 0:
                     return
             time.sleep(0.15)
-        raise AssertionError('isolated port 8001 was not released')
+        raise AssertionError(f'isolated port {TEST_PORT} was not released')
 
     try:
         start()
@@ -224,7 +228,13 @@ def main():
             for fmt, model in [('srt', 'Qwen3-ASR-0.6B-hf'), ('txt', 'faster-whisper-tiny'), ('vtt', 'Qwen3-ASR-1.7B-hf')]:
                 page.locator('#modelSelect').select_option(model)
                 page.locator('#fileList input[type=checkbox]').check()
-                page.locator(f'.fmt-btn[data-fmt={fmt}]').click()
+                # Wait for each request and its selection reset before choosing the
+                # next task; otherwise a late response can clear the next check.
+                with page.expect_response(lambda response: response.url.endswith('/api/tasks/add')
+                                           and response.request.method == 'POST') as created:
+                    page.locator(f'.fmt-btn[data-fmt={fmt}]').click()
+                assert created.value.ok and created.value.json()['created'] == 1
+                page.wait_for_function("!document.querySelector('#fileList input[type=checkbox]').checked")
             page.locator('.rowbar-fill').first.wait_for(state='visible')
             assert page.locator('#asciiProgress').is_visible()
             assert page.locator('#currentTaskName').inner_text() == 'sample.wav'
@@ -312,9 +322,9 @@ def main():
                 """async oldPid => {
                   try {
                     const h = await (await fetch('/api/health', {cache: 'no-store'})).json();
-                    return h.pid !== oldPid && h.version === '1.0.0';
+                    return h.pid !== oldPid && h.version === '%s';
                   } catch (_) { return false; }
-                }""",
+                }""" % EXPECTED_VERSION,
                 arg=old_pid, timeout=65000,
             )
             page.wait_for_function("document.querySelector('#downBanner').hidden", timeout=15000)

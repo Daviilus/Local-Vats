@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<title>Lvats · 第三方 API 配置</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0e14; --panel: #121722; --panel-2: #171e2c;
+    --line: rgba(255,255,255,.10); --text: #e8ecf4; --muted: #a2abbc;
+    --accent: #ffa03c; --accent-hot: #ff6b35; --ok: #5ad6a2; --err: #ff8793;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+    --display: "Bricolage Grotesque", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--display); font-size: 14px; line-height: 1.65; }
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background: radial-gradient(600px 420px at 82% -8%, rgba(255,107,53,.16), transparent 60%),
+      radial-gradient(520px 380px at -6% 108%, rgba(255,160,60,.10), transparent 60%),
+      radial-gradient(900px 700px at 50% 120%, rgba(30,42,70,.55), transparent 70%);
+  }
+  .wrap { width: min(920px, calc(100% - 40px)); margin: 0 auto; padding: 28px 0 40px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+  .brand { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text); }
+  .brand-name { font-size: 26px; font-weight: 800; }
+  .brand .flame { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 12px; background: radial-gradient(circle at 35% 35%, #ffd9a0, var(--accent-hot)); box-shadow: 0 0 18px rgba(255,107,53,.65); }
+  .brand-subtitle { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .page-intro { margin: 28px 0 20px; }
+  h1 { font-size: clamp(24px, 4vw, 30px); line-height: 1.3; margin: 0 0 10px; }
+  h2 { font-size: 17px; line-height: 1.45; margin: 3px 0 0; }
+  p { margin: 0; overflow-wrap: anywhere; }
+  .muted, .help { color: var(--muted); }
+  .card { background: linear-gradient(180deg, var(--panel), rgba(18,23,34,.8)); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+  .label { font-family: var(--mono); color: var(--accent); font-size: 11px; letter-spacing: 2px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; color: var(--muted); font-size: 12px; }
+  .chip::before { content: ""; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
+  .chip[data-state="ready"] { color: var(--ok); border-color: rgba(90,214,162,.35); }
+  .chip[data-state="error"] { color: var(--err); border-color: rgba(255,107,122,.35); }
+  .chip[data-state="loading"] { color: var(--accent); border-color: rgba(255,160,60,.35); }
+  fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+  .fields { display: grid; gap: 20px; }
+  .field { min-width: 0; }
+  .field > label { display: block; font-weight: 600; margin-bottom: 7px; }
+  .optional { color: var(--muted); font-size: 12px; font-weight: 400; }
+  input[type="url"], input[type="text"], input[type="password"], input[type="number"] {
+    display: block; width: 100%; min-width: 0; max-width: 100%; background: #0a0d13;
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px;
+    color: var(--text); font-family: var(--mono); font-size: 14px; line-height: 1.5; transition: border-color .15s, box-shadow .15s;
+  }
+  input::placeholder { color: #818b9f; opacity: 1; }
+  input:focus { outline: none; border-color: rgba(255,160,60,.6); box-shadow: 0 0 0 3px rgba(255,160,60,.14); }
+  input[aria-invalid="true"] { border-color: var(--err); }
+  input:disabled { opacity: .6; cursor: not-allowed; }
+  input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 18px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
+  .help { font-size: 12px; margin-top: 7px; }
+  .key-state { font-size: 12px; color: var(--accent); margin-bottom: 7px; }
+  .check-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  .check-label span { min-width: 0; overflow-wrap: anywhere; }
+  .key-clear { margin-top: 12px; }
+  .key-clear .check-label { color: var(--muted); font-size: 13px; }
+  .key-clear:has(input:disabled) .check-label { cursor: default; }
+  .btn, .btn-main { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; max-width: 100%; border-radius: 10px; padding: 9px 15px; font-family: var(--display); font-size: 13px; line-height: 1.5; cursor: pointer; text-decoration: none; transition: color .15s, border-color .15s, background .15s; }
+  .btn { color: var(--muted); border: 1px solid var(--line); background: transparent; }
+  .btn:hover:not(:disabled) { color: var(--accent); border-color: rgba(255,160,60,.5); background: rgba(255,160,60,.04); }
+  .btn-main { color: #221204; border: 0; font-weight: 700; background: linear-gradient(135deg, #ffc46b, var(--accent) 45%, var(--accent-hot)); }
+  .btn:disabled, .btn-main:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:focus-visible, .btn-main:focus-visible, .brand:focus-visible, input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .proxy-section { padding-top: 20px; border-top: 1px solid var(--line); }
+  .proxy-heading { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .proxy-summary { font-size: 12px; color: var(--muted); }
+  .disclosure-caret { font-size: 12px; transition: transform .24s; }
+  #proxyToggle[aria-expanded="true"] .disclosure-caret { transform: rotate(180deg); }
+  .proxy-panel { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .24s ease, opacity .20s ease; }
+  .proxy-panel.is-open { grid-template-rows: 1fr; opacity: 1; }
+  .proxy-panel-clip { min-height: 0; overflow: hidden; }
+  .proxy-panel-content { margin-top: 14px; padding: 18px; background: rgba(10,13,19,.6); border: 1px solid var(--line); border-radius: 12px; }
+  .proxy-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 145px); gap: 14px; margin-top: 18px; }
+  .proxy-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .proxy-actions .help { margin: 0; flex: 1 1 220px; }
+  .notice { margin-top: 20px; padding: 14px 16px; border: 1px solid rgba(255,160,60,.25); border-left: 3px solid var(--accent); border-radius: 10px; background: rgba(255,160,60,.04); }
+  .notice h2 { font-size: 13px; margin: 0 0 7px; color: var(--accent); }
+  .notice p { font-size: 12px; color: #bbc3d2; }
+  .notice p + p { margin-top: 7px; }
+  code { font-family: var(--mono); font-size: .95em; overflow-wrap: anywhere; }
+  .form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 22px; }
+  .form-actions .btn-main { min-width: 112px; }
+  #saveConfig[aria-busy="true"]::before { content: ""; width: 14px; height: 14px; flex: 0 0 14px; border: 2px solid rgba(34,18,4,.3); border-top-color: #221204; border-radius: 50%; animation: spin .8s linear infinite; }
+  .status { font-size: 13px; color: var(--muted); margin-top: 14px; min-height: 22px; }
+  .status[data-state="success"] { color: var(--ok); }
+  .error { border: 1px solid rgba(255,107,122,.4); border-radius: 10px; background: rgba(255,107,122,.08); color: var(--err); font-size: 13px; margin-top: 12px; padding: 11px 13px; overflow-wrap: anywhere; }
+  .save-note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+  [hidden] { display: none !important; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 560px) {
+    .wrap { width: calc(100% - 28px); padding-top: 20px; }
+    .brand-subtitle { display: none; }
+    .card { padding: 18px 16px; }
+    .proxy-panel-content { padding: 14px; }
+    .proxy-fields { grid-template-columns: minmax(0, 1fr); }
+    .form-actions .btn, .form-actions .btn-main { flex: 1 1 120px; }
+    input[type="url"], input[type="text"], input[type="password"], input[type="number"] { font-size: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="brand" href="/" aria-label="Lvats 首页">
+      <span class="flame" aria-hidden="true"></span><span class="brand-name">Lvats</span>
+      <span class="brand-subtitle">Local Video/Audio Transform Service</span>
+    </a>
+    <nav aria-label="页面导航"><a class="btn" id="backHome" href="/">← 返回首页</a></nav>
+  </header>
+  <main aria-labelledby="pageTitle">
+    <div class="page-intro">
+      <h1 id="pageTitle">第三方 API 配置</h1>
+      <p class="muted">设置独立的远程转录服务。配置不会切换本地模型，也不会自动发送媒体。</p>
+    </div>
+    <section class="card" aria-labelledby="serviceTitle">
+      <div class="card-head">
+        <div><span class="label">REMOTE TRANSCRIPTION</span><h2 id="serviceTitle">服务与认证</h2></div>
+        <span class="chip" id="configStatus" data-state="loading">正在读取配置</span>
+      </div>
+      <noscript><p class="error">配置页面需要 JavaScript。请启用后重新打开；当前不会提交任何设置。</p></noscript>
+      <form id="apiSettingsForm" method="post" action="/api-settings" autocomplete="off" novalidate>
+        <fieldset id="configFields" disabled aria-label="第三方 API 设置">
+          <div class="fields">
+            <div class="field">
+              <label for="apiUrl">服务 URL <span class="optional">（留空停用远程配置）</span></label>
+              <input id="apiUrl" type="url" maxlength="2048" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="https://api.example.com/v1" aria-describedby="apiUrlHelp" />
+              <p class="help" id="apiUrlHelp">支持 <code>https://host/v1</code> 或完整 <code>https://host/v1/audio/transcriptions</code> 地址。公网必须使用 HTTPS；HTTP 仅供本机回环测试。不要在 URL 中填写密钥、用户名、密码或查询参数。留空保存后，远程配置将不再就绪，但不会自动清除已有密钥。</p>
+            </div>
+            <div class="field">
+              <label for="apiModel">模型名称</label>
+              <input id="apiModel" type="text" value="whisper-1" maxlength="128" autocomplete="off" spellcheck="false" autocapitalize="none" required aria-describedby="apiModelHelp" />
+              <p class="help" id="apiModelHelp">默认 <code>whisper-1</code>，可按服务商要求修改。使用不超过 128 个字符的模型标识符（字母、数字及 <code>._:/-</code>），以字母或数字开头；OpenAI 兼容转录协议需要提交 <code>model</code> 字段。</p>
+            </div>
+            <div class="field">
+              <label for="apiKey">API Key <span class="optional">（可选）</span></label>
+              <p class="key-state" id="apiKeyState">尚未读取密钥状态</p>
+              <input id="apiKey" type="password" maxlength="4096" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="输入新密钥；留空保留已有密钥" aria-describedby="apiKeyState apiKeyHelp clearApiKeyHelp" />
+              <p class="help" id="apiKeyHelp">不会显示已有密钥，不在浏览器中持久化。新输入仅随「确定」提交给当前 Lvats 服务；保存成功或离开页面时会清空本次输入。</p>
+              <div class="key-clear">
+                <label class="check-label" for="clearApiKey"><input id="clearApiKey" type="checkbox" disabled aria-describedby="clearApiKeyHelp" /><span>保存时清除已有 API Key</span></label>
+                <p class="help" id="clearApiKeyHelp">清除前会再次确认，可能导致服务无法认证。清除与输入新密钥不能同时进行。</p>
+              </div>
+            </div>
+            <section class="proxy-section" aria-labelledby="proxyToggle">
+              <div class="proxy-heading">
+                <button class="btn" id="proxyToggle" type="button" aria-expanded="false" aria-controls="proxyPanel"><span>API 代理配置</span><span class="disclosure-caret" aria-hidden="true">▾</span></button>
+                <span class="proxy-summary" id="proxySummary">可选 · 不使用代理</span>
+              </div>
+              <div class="proxy-panel" id="proxyPanel" hidden inert>
+                <div class="proxy-panel-clip">
+                  <div class="proxy-panel-content">
+                    <label class="check-label" for="proxyEnabled"><input id="proxyEnabled" type="checkbox" role="switch" aria-describedby="proxyEnabledHelp" /><span>启用 HTTP 代理</span></label>
+                    <p class="help" id="proxyEnabledHelp">关闭后点击「确定」，API 将直接连接，不使用此代理。展开或折叠面板不会改变已保存的设置。</p>
+                    <fieldset id="proxyFields" disabled aria-label="HTTP 代理地址">
+                      <div class="proxy-fields">
+                        <div class="field">
+                          <label for="proxyUrl">HTTP 代理 URL</label>
+                          <input id="proxyUrl" type="url" maxlength="2048" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="http://127.0.0.1" aria-describedby="proxyUrlHelp" />
+                          <p class="help" id="proxyUrlHelp">例如 <code>http://127.0.0.1</code>。仅支持 HTTP 代理，不支持路径、查询参数或内嵌用户名/密码；端口在下方单独填写。</p>
+                        </div>
+                        <div class="field">
+                          <label for="proxyPort">代理端口</label>
+                          <input id="proxyPort" type="number" min="1" max="65535" step="1" inputmode="numeric" placeholder="7890" autocomplete="off" aria-describedby="proxyPortHelp" />
+                          <p class="help" id="proxyPortHelp">整数，范围 1–65535。</p>
+                        </div>
+                      </div>
+                    </fieldset>
+                    <div class="proxy-actions">
+                      <button class="btn" id="clearProxy" type="button">禁用并清空代理</button>
+                      <p class="help">清空只修改当前表单，仍需点击「确定」保存。</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </fieldset>
+        <aside class="notice" aria-labelledby="protocolTitle">
+          <h2 id="protocolTitle">协议、隐私与费用提示</h2>
+          <p>此页使用 OpenAI 兼容的 <code>multipart/form-data</code> 音频转录协议。需要服务支持 <code>audio/transcriptions</code>；模型名称、文件大小、音频格式及字幕时间轴支持以服务商为准，不保证兼容所有第三方 API。</p>
+          <p>仅在首页明确选择第三方 API 并确认任务后，抽取的音频及提示词才会发送到所配置的服务，可能产生费用；不发送原视频或源文件路径。HTTP 代理启用后也参与传输，本地转录流程不变。</p>
+          <p>音频按最多 10 分钟、单声道 MP3 分块上传。SRT/VTT 需要服务返回完整有效的分段时间轴；否则任务失败，可改用 TXT。取消只能停止本机请求，不能撤回已上传音频或费用；中断的 API 任务不会自动重新上传。</p>
+          <p>「确定」只保存并应用配置，不会调用第三方服务，也不代表认证、代理或连通性测试成功。</p>
+        </aside>
+        <div class="form-actions">
+          <button class="btn-main" id="saveConfig" type="submit" disabled aria-busy="false">确定</button>
+          <button class="btn" id="reloadConfig" type="button" disabled>重新读取配置</button>
+        </div>
+        <p class="status" id="formStatus" role="status" aria-live="polite" aria-atomic="true">正在从当前 Lvats 服务读取配置…</p>
+        <p class="error" id="formError" role="alert" aria-live="assertive" aria-atomic="true" hidden></p>
+        <p class="save-note">URL、模型、密钥与代理设置会一起保存；最终校验由后端执行。</p>
+      </form>
+    </section>
+  </main>
+  <footer><span>Lvats · 独立 API 配置 · 密钥不在浏览器持久化</span><span id="configRevision">配置尚未读取</span></footer>
+</div>
+<script>
+(() => {
+  'use strict';
+
+  const ENDPOINT = '/api/remote/config';
+  const UPGRADE_MESSAGE = '当前服务尚未加载此功能，请使用新版服务';
+  const form = document.getElementById('apiSettingsForm');
+  const configFields = document.getElementById('configFields');
+  const apiUrl = document.getElementById('apiUrl');
+  const apiModel = document.getElementById('apiModel');
+  const apiKey = document.getElementById('apiKey');
+  const apiKeyState = document.getElementById('apiKeyState');
+  const clearApiKey = document.getElementById('clearApiKey');
+  const proxyToggle = document.getElementById('proxyToggle');
+  const proxyPanel = document.getElementById('proxyPanel');
+  const proxyEnabled = document.getElementById('proxyEnabled');
+  const proxyFields = document.getElementById('proxyFields');
+  const proxyUrl = document.getElementById('proxyUrl');
+  const proxyPort = document.getElementById('proxyPort');
+  const proxySummary = document.getElementById('proxySummary');
+  const saveConfig = document.getElementById('saveConfig');
+  const reloadConfig = document.getElementById('reloadConfig');
+  const formStatus = document.getElementById('formStatus');
+  const formError = document.getElementById('formError');
+  const configStatus = document.getElementById('configStatus');
+  const configRevision = document.getElementById('configRevision');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const validatedInputs = [apiUrl, apiModel, apiKey, proxyUrl, proxyPort];
+  let loaded = false;
+  let busy = false;
+  let keyIsSet = false;
+  let savedRevision = null;
+  let savedUrl = '';
+  let dirty = false;
+  let proxyExpanded = false;
+  let panelHideTimer = null;
+  let activeRequest = null;
+
+  function setStatus(message, state = '') {
+    formStatus.textContent = message;
+    formStatus.dataset.state = state;
+  }
+
+  function setError(message) {
+    // Only fixed, client-owned messages are rendered. Server errors may contain secrets.
+    formError.textContent = message;
+    formError.hidden = !message;
+  }
+
+  function setChip(message, state) {
+    configStatus.textContent = message;
+    configStatus.dataset.state = state;
+  }
+
+  function syncKeyControls() {
+    const hasNewKey = apiKey.value.length > 0;
+    clearApiKey.disabled = !loaded || busy || !keyIsSet || hasNewKey;
+    apiKey.disabled = clearApiKey.checked;
+    apiKeyState.textContent = !loaded ? '密钥状态尚未读取；读取当前配置后才可编辑。'
+      : clearApiKey.checked ? '已选择清除已有密钥；点击「确定」后需要再次确认。'
+        : keyIsSet ? '已设置密钥 · 留空将保留已有密钥，不会显示其内容。'
+          : '尚未设置密钥 · 若服务需要认证，请输入新的 API Key。';
+  }
+
+  function syncProxyControls() {
+    proxyFields.disabled = !proxyEnabled.checked;
+    proxyUrl.required = proxyEnabled.checked;
+    proxyPort.required = proxyEnabled.checked;
+    proxySummary.textContent = proxyEnabled.checked ? '表单设置 · 使用 HTTP 代理' : '表单设置 · 不使用代理（直连）';
+  }
+
+  function setBusy(value, saving = false) {
+    busy = value;
+    configFields.disabled = value || !loaded;
+    saveConfig.disabled = value || !loaded;
+    reloadConfig.disabled = value;
+    form.setAttribute('aria-busy', String(value));
+    saveConfig.setAttribute('aria-busy', String(value && saving));
+    saveConfig.textContent = value && saving ? '正在保存…' : '确定';
+    reloadConfig.textContent = value && !saving ? '正在读取…' : '重新读取配置';
+    syncKeyControls();
+    syncProxyControls();
+  }
+
+  function setProxyExpanded(open, animate = true) {
+    proxyExpanded = open;
+    window.clearTimeout(panelHideTimer);
+    proxyToggle.setAttribute('aria-expanded', String(open));
+    if (!open && proxyPanel.contains(document.activeElement)) proxyToggle.focus();
+    proxyPanel.inert = !open;
+    if (!animate || reducedMotion.matches) {
+      proxyPanel.classList.toggle('is-open', open);
+      proxyPanel.hidden = !open;
+      return;
+    }
+    if (open) {
+      proxyPanel.hidden = false;
+      window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        if (proxyExpanded) proxyPanel.classList.add('is-open');
+      }));
+    } else {
+      proxyPanel.classList.remove('is-open');
+      panelHideTimer = window.setTimeout(() => {
+        if (!proxyExpanded) proxyPanel.hidden = true;
+      }, 280);
+    }
+  }
+
+  function resetValidity() {
+    for (const input of validatedInputs) {
+      input.setCustomValidity('');
+      input.removeAttribute('aria-invalid');
+    }
+  }
+
+  function markDirty() {
+    if (busy || !loaded) return;
+    dirty = true;
+    setError('');
+    setStatus('设置尚未保存，点击「确定」后才会应用。');
+  }
+
+  function invalid(input, message) {
+    input.setCustomValidity(message);
+    input.setAttribute('aria-invalid', 'true');
+    if (proxyPanel.contains(input)) setProxyExpanded(true, false);
+    setStatus('请修正配置后再保存。');
+    setError(message);
+    input.focus();
+    input.reportValidity();
+    return null;
+  }
+
+  function isLoopback(hostname) {
+    const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+    // Browsers canonicalize IPv4-mapped IPv6 to hexadecimal words.
+    const mapped = /^::ffff:([a-f\d]{1,4}):([a-f\d]{1,4})$/.exec(host);
+    return Boolean(mapped && (parseInt(mapped[1], 16) >>> 8) === 127);
+  }
+
+  function validateConfig() {
+    resetValidity();
+    const url = apiUrl.value.trim();
+    const model = apiModel.value.trim();
+    let parsed = null;
+    if (url) {
+      try { parsed = new URL(url); } catch (_) { return invalid(apiUrl, '请输入完整的 HTTPS 服务 URL，或本机 HTTP 测试地址。'); }
+      if (!['https:', 'http:'].includes(parsed.protocol) || !parsed.hostname) return invalid(apiUrl, '服务 URL 仅支持 HTTPS，或本机回环 HTTP。');
+      if (parsed.username || parsed.password || /[?\s#\\]/.test(url)) return invalid(apiUrl, '服务 URL 不得包含用户名、密码、查询参数、空白或片段；密钥请填入 API Key 字段。');
+      if (parsed.protocol === 'http:' && !isLoopback(parsed.hostname)) return invalid(apiUrl, '公网 HTTP 不安全。请使用 HTTPS；HTTP 只允许 localhost、127.0.0.1 等回环地址或 ::1。');
+      if (url.length > 2048) return invalid(apiUrl, '服务 URL 过长，请使用不超过 2048 个字符的地址。');
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)) return invalid(apiModel, '请输入有效模型标识符：1–128 个字符，以字母或数字开头，仅包含字母、数字及 ._:/-。');
+    if (clearApiKey.checked && apiKey.value.length > 0) return invalid(apiKey, '清除已有密钥与输入新密钥不能同时进行。请只选择其中一种操作。');
+    if (apiKey.value.length > 4096) return invalid(apiKey, '密钥输入过长，请检查是否粘贴了其他内容。');
+    if (/[\u0000-\u001f\u007f]/.test(apiKey.value)) return invalid(apiKey, 'API Key 不得包含换行或其他控制字符。');
+
+    const proxy = { enabled: proxyEnabled.checked, url: proxyUrl.value.trim(), port: 8080 };
+    const rawPort = proxyPort.value.trim();
+    const portIsValid = /^\d{1,5}$/.test(rawPort) && Number(rawPort) >= 1 && Number(rawPort) <= 65535;
+    if (portIsValid) proxy.port = Number(rawPort);
+    if (!proxy.enabled) proxy.url = '';
+    if (proxy.enabled) {
+      if (!proxy.url) return invalid(proxyUrl, '启用代理时，请输入 HTTP 代理 URL。');
+      let parsedProxy;
+      try { parsedProxy = new URL(proxy.url); } catch (_) { return invalid(proxyUrl, '请输入完整的 HTTP 代理 URL，例如 http://127.0.0.1。'); }
+      if (parsedProxy.protocol !== 'http:' || !parsedProxy.hostname) return invalid(proxyUrl, '代理 URL 必须使用 http://，此配置仅支持 HTTP 代理。');
+      if (parsedProxy.username || parsedProxy.password || /[?\s#\\]/.test(proxy.url) || !['', '/'].includes(parsedProxy.pathname)) return invalid(proxyUrl, '代理 URL 不得包含认证信息、路径、查询参数、空白或片段。');
+      if (proxy.url.length > 2048) return invalid(proxyUrl, '代理 URL 过长，请使用不超过 2048 个字符的地址。');
+      if (!portIsValid) return invalid(proxyPort, '启用代理时，请填写 1–65535 之间的整数端口。');
+      // Inspect the raw authority too: URL.port drops an explicitly written :80.
+      const authority = /^http:\/\/([^/?#]+)\/?$/i.exec(proxy.url);
+      if (!authority || (authority[1].startsWith('[') ? authority[1].slice(authority[1].indexOf(']') + 1).length > 0 : authority[1].includes(':'))) return invalid(proxyUrl, '代理 URL 中不要填写端口，请使用独立的「代理端口」字段。');
+      if (parsed && parsed.protocol === 'http:' && !isLoopback(parsedProxy.hostname)) return invalid(proxyUrl, '本机 HTTP 测试服务只能通过本机回环代理访问，不能通过远端代理明文发送密钥。');
+      proxy.url = 'http://' + parsedProxy.hostname;
+    }
+    const payload = { url, model, proxy, expected_revision: savedRevision };
+    const key = apiKey.value.trim();
+    if (key) payload.api_key = key;
+    if (clearApiKey.checked) payload.clear_api_key = true;
+    if (!form.checkValidity()) {
+      const firstInvalid = validatedInputs.find(input => !input.disabled && !input.validity.valid);
+      return invalid(firstInvalid || apiUrl, '请检查必填字段与输入格式后再保存。');
+    }
+    return payload;
+  }
+
+  function isPublicConfig(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+    if (typeof data.url !== 'string' || typeof data.model !== 'string' || typeof data.api_key_set !== 'boolean' || typeof data.ready !== 'boolean') return false;
+    if (!data.proxy || typeof data.proxy !== 'object' || typeof data.proxy.enabled !== 'boolean' || typeof data.proxy.url !== 'string') return false;
+    const port = data.proxy.port;
+    const revisionIsValid = (typeof data.revision === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(data.revision))
+      || (Number.isSafeInteger(data.revision) && data.revision >= 0);
+    return Number.isInteger(port) && port >= 1 && port <= 65535 && revisionIsValid;
+  }
+
+  async function readPublicConfig(response) {
+    const type = response.headers.get('Content-Type') || '';
+    if (!type.toLowerCase().includes('application/json')) return null;
+    try {
+      const data = await response.json();
+      return isPublicConfig(data) ? data : null;
+    } catch (_) { return null; }
+  }
+
+  function applyPublicConfig(data, initial) {
+    // Only public fields are used. Never read an api_key field or render server error text.
+    apiUrl.value = data.url;
+    apiModel.value = data.model || 'whisper-1';
+    apiKey.value = '';
+    clearApiKey.checked = false;
+    keyIsSet = data.api_key_set;
+    savedRevision = data.revision;
+    savedUrl = data.url;
+    proxyEnabled.checked = data.proxy.enabled;
+    proxyUrl.value = data.proxy.url;
+    proxyPort.value = String(data.proxy.port);
+    loaded = true;
+    dirty = false;
+    resetValidity();
+    syncKeyControls();
+    syncProxyControls();
+    if (initial) setProxyExpanded(data.proxy.enabled, false);
+    const revisionLabel = typeof data.revision === 'string' ? data.revision.slice(0, 8) : String(data.revision);
+    configRevision.textContent = '配置修订 ' + revisionLabel;
+    setChip(data.ready ? '配置已就绪 · 未测试连接' : '配置尚未就绪', data.ready ? 'ready' : 'idle');
+  }
+
+  function unsupported(response) {
+    return [404, 405, 501].includes(response.status);
+  }
+
+  function requestFailure(response, saving) {
+    if (unsupported(response)) {
+      loaded = false;
+      apiKey.value = '';
+      clearApiKey.checked = false;
+      setChip('需要新版服务', 'error');
+      return UPGRADE_MESSAGE;
+    }
+    if ([401, 403].includes(response.status)) return '当前服务的安全校验未通过。请从当前 Lvats 服务打开配置页面后重试。';
+    if ([400, 422].includes(response.status)) return '服务未接受此配置。请检查 URL、模型、密钥与代理设置；最终规则以后端校验为准。';
+    if (response.status === 409) {
+      loaded = false;
+      setChip('配置已变化 · 请重新读取', 'error');
+      return '配置状态已变化，请重新读取当前配置后再保存。';
+    }
+    return saving ? '服务未确认保存成功，请稍后重新读取配置核对是否生效。' : '无法读取配置，请确认当前 Lvats 服务可用后重试。';
+  }
+
+  function startRequest() {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 15000);
+    activeRequest = controller;
+    return { controller, timer };
+  }
+
+  function finishRequest(request) {
+    window.clearTimeout(request.timer);
+    if (activeRequest === request.controller) activeRequest = null;
+  }
+
+  async function loadConfig() {
+    if (busy) return;
+    if (!['http:', 'https:'].includes(window.location.protocol)) {
+      setChip('请从服务打开', 'error');
+      setStatus('尚未读取配置。');
+      setError('请通过当前 Lvats 服务的 /api-settings 页面打开，不能直接打开本地 HTML 文件。');
+      return;
+    }
+    setError('');
+    setBusy(true);
+    setChip('正在读取配置', 'loading');
+    setStatus('正在从当前 Lvats 服务读取配置…');
+    apiKey.value = '';
+    const request = startRequest();
+    try {
+      const response = await fetch(ENDPOINT, {
+        method: 'GET', cache: 'no-store', credentials: 'same-origin', redirect: 'error',
+        headers: { 'Accept': 'application/json', 'X-Lvats-Request': '1' }, signal: request.controller.signal
+      });
+      if (!response.ok) {
+        setStatus('未能读取当前配置。');
+        setError(requestFailure(response, false));
+        if (loaded) setChip('读取失败 · 保留表单', 'error');
+        return;
+      }
+      const data = await readPublicConfig(response);
+      if (!data) {
+        loaded = false;
+        setChip('需要新版服务', 'error');
+        setStatus('未能读取兼容的配置。');
+        setError(UPGRADE_MESSAGE);
+        return;
+      }
+      applyPublicConfig(data, true);
+      setStatus(data.ready ? '已读取保存的配置。配置就绪不代表第三方服务已连通。' : '已读取配置；请补全所需设置后点击「确定」。');
+      if (data.error) setError('配置已读取，但服务报告配置不可用。请检查设置，必要时重新输入密钥后保存。');
+    } catch (_) {
+      setChip('读取失败', 'error');
+      setStatus('未能读取当前配置。');
+      setError('读取配置失败或超时。请检查当前 Lvats 服务，然后点击「重新读取配置」。');
+    } finally {
+      finishRequest(request);
+      setBusy(false);
+    }
+  }
+
+  async function saveSettings(event) {
+    event.preventDefault();
+    if (busy || !loaded) return;
+    setError('');
+    const payload = validateConfig();
+    if (!payload) return;
+    if ((payload.clear_api_key || (!payload.url && savedUrl)) && !window.confirm(payload.clear_api_key
+      ? '确定清除已保存的 API Key 并保存全部配置吗？清除后需要认证的第三方服务可能无法使用。此操作不会发送媒体。'
+      : '服务 URL 为空。确定保存并停用远程配置吗？已有密钥会保留，本地转录不受影响。')) {
+      setStatus('已取消保存，配置尚未应用。');
+      return;
+    }
+    setBusy(true, true);
+    setStatus('正在保存全部配置；不会调用第三方转录服务…');
+    const request = startRequest();
+    try {
+      const response = await fetch(ENDPOINT, {
+        method: 'PUT', cache: 'no-store', credentials: 'same-origin', redirect: 'error',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Lvats-Request': '1' },
+        body: JSON.stringify(payload), signal: request.controller.signal
+      });
+      if (!response.ok) {
+        setStatus('未收到保存成功的确认。');
+        setError(requestFailure(response, true));
+        return;
+      }
+      apiKey.value = '';
+      const data = await readPublicConfig(response);
+      if (!data) {
+        loaded = false;
+        setChip('未确认生效 · 请重新读取', 'error');
+        setStatus('服务已响应，但未返回有效的配置确认；本次密钥输入已清空。');
+        setError('无法确认配置是否完整生效，请重新读取配置。不要把保存响应视为连通性测试。');
+        return;
+      }
+      applyPublicConfig(data, false);
+      setStatus(data.ready ? '配置已保存并应用。未进行第三方连通性测试，也未发送媒体。' : '配置已保存并应用，但尚未就绪。未进行第三方连通性测试，也未发送媒体。', 'success');
+      if (data.error) setError('配置已保存，但服务报告配置不可用。请检查设置，必要时重新输入密钥后再保存。');
+    } catch (_) {
+      loaded = false;
+      setChip('未确认生效 · 请重新读取', 'error');
+      setStatus('未收到保存成功的确认。');
+      setError('保存请求失败或超时，配置可能已被服务接收。请重新读取配置核对是否生效；不会自动重试或调用第三方 API。');
+    } finally {
+      // Drop the temporary key reference; never persist or log this payload.
+      delete payload.api_key;
+      finishRequest(request);
+      setBusy(false);
+    }
+  }
+
+  form.addEventListener('submit', saveSettings);
+  configFields.addEventListener('input', event => {
+    if (validatedInputs.includes(event.target)) {
+      event.target.setCustomValidity('');
+      event.target.removeAttribute('aria-invalid');
+    }
+    syncKeyControls();
+    syncProxyControls();
+    markDirty();
+  });
+  clearApiKey.addEventListener('change', () => {
+    if (clearApiKey.checked) apiKey.value = '';
+    syncKeyControls();
+    markDirty();
+  });
+  proxyEnabled.addEventListener('change', () => {
+    syncProxyControls();
+    resetValidity();
+    markDirty();
+  });
+  proxyToggle.addEventListener('click', () => setProxyExpanded(!proxyExpanded));
+  document.getElementById('clearProxy').addEventListener('click', () => {
+    proxyEnabled.checked = false;
+    proxyUrl.value = '';
+    proxyPort.value = '';
+    syncProxyControls();
+    resetValidity();
+    markDirty();
+    setStatus('已禁用并清空代理表单。点击「确定」后才会保存并改为直连。');
+  });
+  reloadConfig.addEventListener('click', () => {
+    if (busy) return;
+    if (dirty && !window.confirm('重新读取会替换未保存的配置，并清空本次密钥输入。确定重新读取吗？')) return;
+    loadConfig();
+  });
+
+  function forgetKey() {
+    apiKey.value = '';
+    clearApiKey.checked = false;
+  }
+  document.querySelectorAll('a[href="/"]').forEach(link => link.addEventListener('click', forgetKey));
+  window.addEventListener('beforeunload', forgetKey);
+  window.addEventListener('pagehide', () => {
+    forgetKey();
+    if (activeRequest) activeRequest.abort();
+  });
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) {
+      forgetKey();
+      if (!busy) loadConfig();
+    }
+  });
+  loadConfig();
+})();
+</script>
+</body>
+</html>

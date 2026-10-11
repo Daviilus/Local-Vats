@@ -1,13 +1,55 @@
-param(
-    [string]$OutputDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'config\ssl'),
+﻿param(
+    [string]$OutputDirectory = '',
     [switch]$SkipTrust
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $OutputDirectory) {
+    $projectRoot = Split-Path -Parent $PSScriptRoot
+    $python = if ($env:LVATS_PYTHON) { $env:LVATS_PYTHON } else { Join-Path $projectRoot '.venv\Scripts\python.exe' }
+    if (-not (Test-Path -LiteralPath $python)) {
+        $python = Join-Path $env:APPDATA 'LobsterAI\runtimes\python-win\python.exe'
+    }
+    if (-not (Test-Path -LiteralPath $python)) {
+        throw '未找到可用于读取 Lvats 统一路径的 Python；请由启动器调用或显式传入 OutputDirectory。'
+    }
+    $previousAppRoot = $env:ASR_APP_ROOT
+    try {
+        $env:ASR_APP_ROOT = $projectRoot
+        $paths = (& $python -c "import os, sys; sys.path.insert(0, os.environ['ASR_APP_ROOT']); import json, lvats_paths; print(json.dumps(lvats_paths.PATHS.public_dict()))") | ConvertFrom-Json
+        $OutputDirectory = [string]$paths.SSL_DIR
+    } finally {
+        $env:ASR_APP_ROOT = $previousAppRoot
+    }
+}
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $rootPath = Join-Path $output 'lvats-local-root.cer'
 $certPath = Join-Path $output 'lvats-cert.pem'
 $keyPath = Join-Path $output 'lvats-key.pem'
+
+# Provenance is recorded ONLY for a freshly generated root, never inferred from
+# a subject name or an existing certificate. DPAPI binds the receipt to this user.
+$receiptPath = Join-Path $output 'lvats-root-provenance.dpapi'
+
+function Write-LvatsRootProvenance($Certificate) {
+    Add-Type -AssemblyName System.Security
+    $receipt = [ordered]@{
+        schema = 1
+        creator = 'Lvats/setup_local_https.ps1'
+        owner_sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        store = 'CurrentUser/Root'
+        thumbprint = $Certificate.Thumbprint
+        certificate_sha256 = ([BitConverter]::ToString(
+            [Security.Cryptography.SHA256]::Create().ComputeHash($Certificate.RawData))).Replace('-', '')
+        created_utc = [DateTime]::UtcNow.ToString('o')
+        ssl_directory = $output
+    }
+    $plain = [Text.Encoding]::UTF8.GetBytes(($receipt | ConvertTo-Json -Compress))
+    $protected = [Security.Cryptography.ProtectedData]::Protect($plain,
+        [Text.Encoding]::UTF8.GetBytes('Lvats/root-provenance/v1'),
+        [Security.Cryptography.DataProtectionScope]::CurrentUser)
+    [IO.File]::WriteAllBytes($receiptPath, $protected)
+}
 
 function Get-DerLength([int]$Length) {
     if ($Length -lt 128) { return [byte[]]@([byte]$Length) }
@@ -142,6 +184,7 @@ try {
     [IO.File]::WriteAllBytes($rootPath, $root.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
     [IO.File]::WriteAllText($certPath, (ConvertTo-Pem 'CERTIFICATE' $leafWithKey.RawData), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText($keyPath, (ConvertTo-Pem 'RSA PRIVATE KEY' (Export-RsaPrivateKeyPkcs1 $leafKey)), [Text.UTF8Encoding]::new($false))
+    Write-LvatsRootProvenance $root
 } finally {
     if ($leafWithKey) { $leafWithKey.Dispose() }
     if ($leaf) { $leaf.Dispose() }

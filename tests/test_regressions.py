@@ -263,7 +263,8 @@ class Regressions(unittest.TestCase):
         helper = server.RESTART_HELPER.read_text(encoding='utf-8')
         self.assertIn('start_lvats.ps1', helper)
         self.assertIn('WindowsPowerShell', helper)
-        self.assertIn('state.mkdir(parents=True, exist_ok=True)', helper)
+        self.assertIn('lvats_paths.ensure_directories(layout)', helper)
+        self.assertIn('layout.log_dir', helper)
         with patch.dict(os.environ, {'ASR_RESTART_TEST_COMMAND': '["python", "serve.py"]'}), \
              patch.object(server.subprocess, 'Popen') as popen:
             popen.return_value.pid = 123

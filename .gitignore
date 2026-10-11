@@ -5,6 +5,11 @@ __pycache__/
 .venv/
 .idea/
 .vscode/
+build/
+dist/
+release/
+installer/
+packaging/
 
 # Model weights are downloaded separately.
 models/
@@ -23,8 +28,21 @@ output.test/
 .wavcache.test/
 .cowork-temp/
 state/
+data/
+cache/
+temp/
+logs/
+updates/
+user-data/
 config/ssl/
 config/quick_prompts*.json
+config/remote-api*.json
+config/.remote-api-config-*.tmp
+.env
+.env.*
+!.env.example
+*.pem
+*.key
 
 # Internal development and handoff material.
 .agent/

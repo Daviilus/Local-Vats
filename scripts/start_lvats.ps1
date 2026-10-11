@@ -5,12 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath($ProjectRoot)
-$state = Join-Path $root 'state'
-$pidPath = Join-Path $state 'lvats.pid'
-$stdoutPath = Join-Path $state 'server_8000.out.log'
-$stderrPath = Join-Path $state 'server_8000.err.log'
 $url = "https://127.0.0.1:$Port"
-[IO.Directory]::CreateDirectory($state) | Out-Null
 
 function Get-LvatsHealth {
     try {
@@ -48,10 +43,51 @@ function Confirm-CudaRuntime([string]$Executable) {
     }
 }
 
+function Get-LvatsPaths([string]$Executable) {
+    $previousAppRoot = $env:ASR_APP_ROOT
+    try {
+        $env:ASR_APP_ROOT = $root
+        # LobsterAI's embedded Python uses an isolated _pth file and ignores the
+        # working directory/PYTHONPATH. Add the project root explicitly.
+        $json = & $Executable -c "import os, sys; sys.path.insert(0, os.environ['ASR_APP_ROOT']); import json, lvats_paths; lvats_paths.ensure_directories(); print(json.dumps(lvats_paths.PATHS.public_dict()))"
+        if (($LASTEXITCODE -ne 0) -or (-not $json)) { throw '统一路径模块未能返回目录信息。' }
+        return ($json | ConvertFrom-Json)
+    } finally {
+        $env:ASR_APP_ROOT = $previousAppRoot
+    }
+}
+
+function Invoke-LogRotation([string]$Path, [long]$MaxBytes = 10485760, [int]$Backups = 5) {
+    if ((Test-Path -LiteralPath $Path) -and ((Get-Item -LiteralPath $Path).Length -ge $MaxBytes)) {
+        $oldest = "$Path.$Backups"
+        if (Test-Path -LiteralPath $oldest) { Remove-Item -LiteralPath $oldest -Force }
+        for ($i = $Backups - 1; $i -ge 1; $i--) {
+            $source = "$Path.$i"
+            if (Test-Path -LiteralPath $source) { Move-Item -LiteralPath $source -Destination "$Path.$($i + 1)" }
+        }
+        Move-Item -LiteralPath $Path -Destination "$Path.1"
+    }
+}
+
+$executable = Resolve-LvatsExecutable
+$paths = Get-LvatsPaths $executable
+$runtime = [string]$paths.RUNTIME_DIR
+$pidPath = Join-Path $runtime 'lvats.pid'
+$stdoutPath = Join-Path ([string]$paths.LOG_DIR) 'server_8000.out.log'
+$stderrPath = Join-Path ([string]$paths.LOG_DIR) 'server_8000.err.log'
+[IO.Directory]::CreateDirectory($runtime) | Out-Null
+[IO.Directory]::CreateDirectory([string]$paths.LOG_DIR) | Out-Null
+
+$certificateScript = Join-Path ([string]$paths.RESOURCE_ROOT) 'scripts\setup_local_https.ps1'
+$systemPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+& $systemPowerShell -NoProfile -ExecutionPolicy Bypass `
+    -File $certificateScript -OutputDirectory ([string]$paths.SSL_DIR)
+if ($LASTEXITCODE -ne 0) { throw 'HTTPS certificate setup failed.' }
+
 $lock = $null
 try {
     try {
-        $lockPath = Join-Path $state 'lvats.launch.lock'
+        $lockPath = Join-Path $runtime 'lvats.launch.lock'
         $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate,
             [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     } catch [IO.IOException] {
@@ -76,9 +112,13 @@ try {
     }
 
     if (Test-Path -LiteralPath $pidPath) { Remove-Item -LiteralPath $pidPath -Force }
-    $executable = Resolve-LvatsExecutable
     Confirm-CudaRuntime $executable
-    Write-Output "[Lvats] GPU 自检通过，正在后台启动 Lvats v1.0.0：$url"
+    Invoke-LogRotation $stdoutPath
+    Invoke-LogRotation $stderrPath
+    $lvatsVersion = '0.0.0-dev'
+    $versionFile = Join-Path $root 'VERSION'
+    if (Test-Path -LiteralPath $versionFile) { $lvatsVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim() }
+    Write-Output "[Lvats] GPU 自检通过，正在后台启动 Lvats v$lvatsVersion：$url"
     Write-Output "[Lvats] 进程：$executable"
 
     $process = Start-Process -FilePath $executable -ArgumentList 'server.py' -WorkingDirectory $root `
@@ -88,14 +128,14 @@ try {
         $health = Get-LvatsHealth
         if ($health) {
             if (-not $health.cuda) {
-                throw '新启动的 Lvats 未能识别 GPU，请查看 state\server_8000.out.log。'
+                throw "新启动的 Lvats 未能识别 GPU，请查看 $stdoutPath。"
             }
-            Write-Output '[Lvats] 服务已就绪并在后台运行（无窗口）。日志：state\server_8000.out.log'
+            Write-Output "[Lvats] 服务已就绪并在后台运行（无窗口）。日志：$stdoutPath"
             exit 0
         }
         if ($process.HasExited) { throw "Lvats 进程已退出（退出码 $($process.ExitCode)）。" }
     }
-    throw '30 秒内未检测到服务就绪，请查看 state\server_8000.err.log。'
+    throw "30 秒内未检测到服务就绪，请查看 $stderrPath。"
 } catch {
     Write-Error "[Lvats] $($_.Exception.Message)"
     exit 1

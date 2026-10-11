@@ -233,10 +233,11 @@
       <h1>Lvats<span class="thin">Local Video/Audio Transform Service</span></h1>
     </div>
     <div class="chips">
-      <span class="chip" id="verChip"><span class="dot"></span>v1.0.0</span>
+      <span class="chip" id="verChip"><span class="dot"></span>v—</span>
       <span class="chip" id="gpuChip"><span class="dot"></span>GPU</span>
       <span class="chip" id="modelChip"><span class="dot"></span>模型未加载</span>
       <button class="btn" id="unload" hidden>⏏ 卸载模型</button>
+      <a class="btn" id="apiSettingsLink" href="/api-settings" style="text-decoration:none" title="打开独立的第三方 API 配置页面">第三方 API</a>
       <button class="btn" id="restartBtn" title="安全保存队列并重启 Lvats 本机服务">↻ 重启服务</button>
       <button class="btn" id="shutdownBtn" title="停止 Lvats 服务（将中断运行中的任务）">⏻ 停止服务</button>
     </div>
@@ -304,8 +305,9 @@
       </div>
       <div class="dl-row">
         <span class="label">模型</span>
-        <select id="modelSelect" class="model-select" title="本次任务使用的 ASR 模型"></select>
+        <select id="modelSelect" class="model-select" aria-label="本次任务使用的模型或 API" title="本次任务使用的模型或第三方 API"></select>
       </div>
+      <p class="empty" id="remoteTaskHint" hidden style="color:var(--accent);line-height:1.7;margin-bottom:0">API 模式会把音频与提示词发送到第三方，可能产生费用。每次创建任务前需确认；保存配置不会发送媒体。</p>
     </div>
 
   <!-- 模型管理：中间跨两行 -->
@@ -750,11 +752,14 @@
     const t = state.tasks.find(x => x.id === tid);
 
     if (act === 'cancel') {
+      const isRemote = t && t.model_id === 'third-party-api';
+      const cancellationNote = isRemote
+        ? '将停止本机 API 请求；已经上传的音频和可能产生的费用无法撤回。\n'
+        : '将在最近一个切块结束时停止（延迟不超过一个切块）。\n';
       if (!confirm(`确定取消「${t ? t.name : tid}」？\n\n` +
-                   `将在最近一个切块结束时停止（延迟不超过一个切块）。\n` +
-                   `已识别内容保留在页面上，但不会生成输出文件。`)) return;
+                   cancellationNote + `已识别内容保留在页面上，但不会生成输出文件。`)) return;
       const d = await postJSON(`/api/tasks/${tid}/cancel`, {});
-      if (d.ok) { toast('已请求取消，将在最近一个切块边界停止', 'warn'); }
+      if (d.ok) { toast(isRemote ? '已请求停止本机 API 调用；已上传音频和费用无法撤回' : '已请求取消，将在最近一个切块边界停止', 'warn'); }
       else toast(d.detail || '取消失败', 'err');
       refresh();
       return;
@@ -972,24 +977,40 @@
   }
 
   /* ── 格式按钮 → 创建任务 ── */
+  let creatingTasks = false;
   document.querySelectorAll('.fmt-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (creatingTasks) return;
       const ids = [...checked];
       if (!ids.length) { toast('请先勾选要转录的文件', 'warn'); return; }
-      const r = await fetch('/api/tasks/add', { method: 'POST', headers: {'Content-Type':'application/json'},
+      const isRemote = modelSelect.value === 'third-party-api';
+      const remoteRevision = isRemote ? modelSelect.selectedOptions[0]?.dataset.revision : null;
+      if (isRemote && !confirm(`将 ${ids.length} 个文件的音频及提示词发送到已配置的第三方 API？\n\n服务可能收费；Lvats 不会自动重试付费请求。TXT/SRT/VTT 能力以服务兼容性为准。`)) return;
+      creatingTasks = true;
+      document.querySelectorAll('.fmt-btn').forEach(button => { button.disabled = true; });
+      try {
+      const r = await fetch('/api/tasks/add', { method: 'POST', headers: {'Content-Type':'application/json', 'X-Lvats-Request':'1'},
         body: JSON.stringify({ file_ids: ids, format: btn.dataset.fmt, prompt: promptInput.value.trim(),
-                             model_id: modelSelect.value || null }) });
+                             model_id: modelSelect.value || null, remote_consent: isRemote,
+                             remote_revision: remoteRevision }) });
       const d = await r.json();
+      if (!r.ok) { toast(d.detail || '创建任务失败，请检查 API 配置或所选模型', 'err'); return; }
       if (d.skipped > 0) { toast(`已跳过 ${d.skipped} 条重复任务`, 'warn'); log(` 跳过 ${d.skipped} 条重复任务`, 'warn'); }
       if (d.created > 0) { toast(`已创建 ${d.created} 条 ${btn.dataset.fmt} 任务`, 'ok'); log(`+ 创建 ${d.created} 条 ${btn.dataset.fmt} 任务`); }
       if (d.created === 0 && d.skipped === 0) toast('未创建任务（勾选文件路径无效？）', 'err');
       checked.clear();
-      refresh();
+      await refresh();
+      } catch (_) { toast('创建任务的本机请求失败，请检查服务状态', 'err'); }
+      finally {
+        creatingTasks = false;
+        document.querySelectorAll('.fmt-btn').forEach(button => { button.disabled = false; });
+      }
     });
   });
 
   /* ── 另存为 ── */
   async function preloadSelectedModel() {
+    if (modelSelect.value === 'third-party-api') return;
     try {
       const r = await fetch('/api/preload', {method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1296,7 +1317,7 @@
   }
 
   restartBtn.addEventListener('click', async () => {
-    if (!confirm('确定重启 Lvats 服务？\n\n队列会先安全保存；运行中的任务将在新服务中重新排队并从头转录。')) return;
+    if (!confirm('确定重启 Lvats 服务？\n\n队列会先安全保存；本地模型任务按恢复规则处理。运行中的 API 任务将被中断，不能撤回音频或费用，不会自动重新上传，需确认后手动重建。')) return;
     restartBtn.disabled = true;
     shutdownBtn.disabled = true;
     showDownBanner('↻ 正在重启：保存队列并安排新服务…', 'restart');
@@ -1306,7 +1327,7 @@
       restartRequested = true;
       restartToken = d.token;
       restartOldPid = d.old_pid;
-      log(`↻ 队列已保存，重启流程已开始${d.interrupted ? `；${d.interrupted} 个运行中任务将重新排队` : ''}`, 'warn');
+      log(`↻ 队列已保存，重启流程已开始${d.interrupted ? `；${d.interrupted} 个运行中任务已请求中断，API 不自动重传` : ''}`, 'warn');
       pollRestart();
     } catch (e) {
       restartFailed(e.message || '无法发送重启请求');
@@ -1314,7 +1335,7 @@
   });
 
   shutdownBtn.addEventListener('click', async () => {
-    if (!confirm('确定停止 Lvats 服务？\n\n⚠ 将中断运行中的任务（运行中任务在切块边界停止，重启后会自动重新排队）。\n停止后页面不可用，需双击 启动Lvats.bat 重新启动。')) return;
+    if (!confirm('确定停止 Lvats 服务？\n\n⚠ 将中断运行中的任务。本地任务按恢复规则处理；API 请求无法撤回已上传音频或费用，不会自动重传，需确认后手动重建。\n停止后页面不可用，需双击 启动Lvats.bat 重新启动。')) return;
     shutdownRequested = true;
     shutdownBtn.disabled = true;
     try {
@@ -1381,23 +1402,33 @@
   function modelFamily(m) {
     if (m.engine === 'qwen') return 'Qwen3';
     if (m.engine === 'faster-whisper') return 'faster-whisper';
+    if (m.engine === 'remote-api') return '第三方 API';
     return 'Others / 其他';
   }
-  const FAMILY_ORDER = ['Qwen3', 'faster-whisper', 'Others / 其他'];
+  const FAMILY_ORDER = ['Qwen3', 'faster-whisper', 'Others / 其他', '第三方 API'];
+  function updateRemoteHint() {
+    $('remoteTaskHint').hidden = modelSelect.value !== 'third-party-api';
+  }
 
   function renderModels(models) {
     models = models || [];
     // 800ms 轮询会频繁调用：模型集合没变就不重建 DOM，避免打断下拉交互
-    const key = models.map(m => m.id + ':' + m.label).join(',');
+    const key = models.map(m => m.id + ':' + m.label + ':' + (m.revision || '')).join(',');
     if (key === lastModelsKey) return;
     lastModelsKey = key;
     const cur = localStorage.getItem(LS_MODEL_KEY);
     modelSelect.innerHTML = '';
+    if (!models.some(m => m.engine !== 'remote-api')) {
+      const placeholder = document.createElement('option');
+      placeholder.value = ''; placeholder.textContent = '— 请明确选择模型或第三方 API —';
+      modelSelect.appendChild(placeholder);
+    }
     // 按家族分组（v0.7.0）：Qwen3 / faster-whisper / Others
     const groups = {};
     models.forEach(m => { (groups[modelFamily(m)] = groups[modelFamily(m)] || []).push(m); });
     FAMILY_ORDER.forEach(fam => {
       const list = groups[fam] || [];
+      if (fam === '第三方 API' && !list.length) return;
       if (fam === 'Qwen3') list.sort((a, b) => {   // 体量升序：0.6B 优先于 1.7B
         const sz = (m) => { const mt = (m.label || '').match(/(\d+(?:\.\d+)?)([BMK]b?)/i); return mt ? parseFloat(mt[1]) * ({'B':1e-3,'K':1e-6,'M':1,'G':1e3}[mt[2].toUpperCase()] || 1) : Infinity; };
         return sz(a) - sz(b);
@@ -1407,6 +1438,7 @@
       list.forEach(m => {
         const o = document.createElement('option');
         o.value = m.id; o.textContent = m.label;
+        if (m.revision) o.dataset.revision = m.revision;
         og.appendChild(o);
       });
       if (!list.length) {
@@ -1427,12 +1459,14 @@
           `<div class="fam-row"><span class="fam-name">${fam}</span>` +
           (groups[fam].map(m => `<span class="ready-chip">${esc(m.label)}<span class="eng">${m.engine === 'faster-whisper' ? 'faster-whisper' : m.engine}</span></span>`).join('')) +
           `</div>`).join('')
-      : '// 未发现可用模型：请检查 ./models/ 或点「重新扫描」';
-    modelMgmtInfo.textContent = `${models.length} 个模型就绪`;
+      : '// 未发现本地模型：检查数据根的 data/models 或重新扫描；远程服务在「第三方 API」中配置';
+    modelMgmtInfo.textContent = `${models.length} 个转录选项就绪`;
+    updateRemoteHint();
   }
 
   modelSelect.addEventListener('change', () => {
     try { localStorage.setItem(LS_MODEL_KEY, modelSelect.value); } catch (_) {}
+    updateRemoteHint();
   });
 
   function renderDlStatus(downloads) {
